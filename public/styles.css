@@ -83,10 +83,6 @@ header::before {
     flex-wrap: wrap;
 }
 
-.status-bar .btn {
-    margin-left: auto;
-}
-
 .status-item {
     display: flex;
     align-items: center;
@@ -652,7 +648,124 @@ header::before {
     font-size: 0.9em;
 }
 
+/* Toast Notifications */
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 400px;
+}
+
+.toast {
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 16px 20px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: slideIn 0.3s ease-out;
+    border-left: 4px solid;
+    min-width: 300px;
+}
+
+.toast.success {
+    border-left-color: #34a853;
+}
+
+.toast.error {
+    border-left-color: #ea4335;
+}
+
+.toast.info {
+    border-left-color: #1a73e8;
+}
+
+.toast-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.toast.success .toast-icon {
+    color: #34a853;
+}
+
+.toast.error .toast-icon {
+    color: #ea4335;
+}
+
+.toast.info .toast-icon {
+    color: #1a73e8;
+}
+
+.toast-message {
+    flex: 1;
+    color: #1a73e8;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.toast-close {
+    background: none;
+    border: none;
+    color: #1a73e8;
+    cursor: pointer;
+    font-size: 18px;
+    padding: 0;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+
+.toast-close:hover {
+    opacity: 1;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideOut {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+}
+
+.toast.hiding {
+    animation: slideOut 0.3s ease-in forwards;
+}
+
 @media (max-width: 768px) {
+    .toast-container {
+        left: 20px;
+        right: 20px;
+        max-width: none;
+    }
+
+    .toast {
+        min-width: auto;
+    }
+
     .credentials-form {
         grid-template-columns: 1fr;
     }

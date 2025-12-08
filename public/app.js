@@ -13,8 +13,8 @@ const API_BASE = '';
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
-    loadSavedCredentials();
-    checkApiStatus();
+    // Always start with first interface - no auto-loading
+    hideMainInterface();
     setupEventListeners();
     loadImportedOffers();
     // Initially disable all actions until authenticated
@@ -24,8 +24,14 @@ document.addEventListener('DOMContentLoaded', () => {
 // Setup event listeners
 function setupEventListeners() {
     document.getElementById('saveCredentialsBtn').addEventListener('click', saveCredentials);
-    document.getElementById('clearCredentialsBtn').addEventListener('click', clearCredentials);
-    document.getElementById('testAuthBtn').addEventListener('click', testAuthentication);
+    const clearBtn = document.getElementById('clearCredentialsBtn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearCredentials);
+    }
+    const testAuthBtn = document.getElementById('testAuthBtn');
+    if (testAuthBtn) {
+        testAuthBtn.addEventListener('click', testAuthentication);
+    }
     document.getElementById('searchBtn').addEventListener('click', searchOffers);
     document.getElementById('clearBtn').addEventListener('click', clearSearch);
     document.getElementById('importSelectedBtn').addEventListener('click', importSelected);
@@ -36,48 +42,122 @@ function setupEventListeners() {
     document.getElementById('clearCategoryBtn').addEventListener('click', clearCategorySelection);
 }
 
-// Load saved credentials from localStorage
-function loadSavedCredentials() {
-    const savedClientId = localStorage.getItem('allegro_clientId');
-    const savedClientSecret = localStorage.getItem('allegro_clientSecret');
+// Toast notification system
+function showToast(message, type = 'info', duration = 5000) {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
     
-    if (savedClientId && savedClientSecret) {
-        document.getElementById('clientId').value = savedClientId;
-        document.getElementById('clientSecret').value = savedClientSecret;
-        // Automatically send credentials to backend and show interface
-        sendCredentialsToBackend(savedClientId, savedClientSecret);
-    } else {
-        // Hide main interface if no credentials
-        hideMainInterface();
-    }
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    
+    const icons = {
+        success: '✓',
+        error: '✕',
+        info: 'ℹ'
+    };
+    
+    toast.innerHTML = `
+        <span class="toast-icon">${icons[type] || icons.info}</span>
+        <span class="toast-message">${escapeHtml(message)}</span>
+        <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+    `;
+    
+    container.appendChild(toast);
+    
+    // Auto remove after duration
+    setTimeout(() => {
+        toast.classList.add('hiding');
+        setTimeout(() => {
+            if (toast.parentElement) {
+                toast.remove();
+            }
+        }, 300);
+    }, duration);
 }
 
-// Save credentials
+// Save credentials and authenticate immediately
 async function saveCredentials() {
     const clientId = document.getElementById('clientId').value.trim();
     const clientSecret = document.getElementById('clientSecret').value.trim();
-    const messageEl = document.getElementById('credentialsMessage');
+    const connectBtn = document.getElementById('saveCredentialsBtn');
     
     if (!clientId || !clientSecret) {
-        messageEl.textContent = 'Credentials required';
-        messageEl.className = 'message error';
-        messageEl.style.display = 'block';
+        showToast('Please enter both Client ID and Client Secret', 'error');
         return;
     }
     
-    // Save to localStorage
-    localStorage.setItem('allegro_clientId', clientId);
-    localStorage.setItem('allegro_clientSecret', clientSecret);
+    // Disable button during authentication
+    connectBtn.disabled = true;
+    connectBtn.textContent = 'CONNECTING...';
     
-    // Send to backend
-    await sendCredentialsToBackend(clientId, clientSecret);
+    try {
+        // Step 1: Send credentials to backend
+        const credentialsResponse = await fetch(`${API_BASE}/api/credentials`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                clientId: clientId,
+                clientSecret: clientSecret
+            })
+        });
+        
+        const credentialsData = await credentialsResponse.json();
+        
+        if (!credentialsData.success) {
+            throw new Error(credentialsData.error || 'Failed to save credentials');
+        }
+        
+        // Step 2: Test authentication immediately
+        const authResponse = await fetch(`${API_BASE}/api/test-auth`);
+        const authData = await authResponse.json();
+        
+        if (authData.success) {
+            // Authentication successful - show detail interface
+            localStorage.setItem('allegro_clientId', clientId);
+            localStorage.setItem('allegro_clientSecret', clientSecret);
+            
+            showToast('Authentication successful!', 'success');
+            
+            // Show main content
+            showMainInterface();
+            
+            // Set authenticated state
+            isAuthenticated = true;
+            const authStatusEl = document.getElementById('authStatus');
+            if (authStatusEl) {
+                authStatusEl.textContent = 'Authenticated';
+                authStatusEl.className = 'status-value success';
+            }
+            
+            // Update UI state
+            updateUIState(true);
+            
+            // Check API status
+            await checkApiStatus();
+            
+            // Auto-load categories when authenticated
+            await loadCategories();
+        } else {
+            // Authentication failed - stay on first interface
+            throw new Error(authData.error || 'Authentication failed. Please check your credentials.');
+        }
+    } catch (error) {
+        // Show error toast and stay on first interface
+        showToast(error.message || 'Authentication failed. Please check your credentials.', 'error');
+        hideMainInterface();
+        updateUIState(false);
+    } finally {
+        // Re-enable button
+        connectBtn.disabled = false;
+        connectBtn.textContent = 'CONNECT';
+    }
 }
 
-// Send credentials to backend
+// This function is no longer used - authentication happens in saveCredentials()
+// Keeping for backward compatibility if needed elsewhere
 async function sendCredentialsToBackend(clientId, clientSecret) {
-    const messageEl = document.getElementById('credentialsMessage');
-    messageEl.style.display = 'none';
-    
     try {
         const response = await fetch(`${API_BASE}/api/credentials`, {
             method: 'POST',
@@ -92,34 +172,13 @@ async function sendCredentialsToBackend(clientId, clientSecret) {
         
         const data = await response.json();
         
-        if (data.success) {
-            messageEl.textContent = 'Connected';
-            messageEl.className = 'message success';
-            messageEl.style.display = 'block';
-            
-            // Show main content
-            showMainInterface();
-            
-            // Update UI state but don't enable actions until auth is tested
-            updateUIState(true);
-            
-            // Check API status
-            await checkApiStatus();
-            
-            // Reset auth status - user must test auth
-            document.getElementById('authStatus').textContent = 'Pending';
-            document.getElementById('authStatus').className = 'status-value';
-            isAuthenticated = false;
-            updateUIState(true);
-        } else {
+        if (!data.success) {
             throw new Error(data.error || 'Failed to save credentials');
         }
+        
+        return true;
     } catch (error) {
-        messageEl.textContent = error.message || 'Connection failed';
-        messageEl.className = 'message error';
-        messageEl.style.display = 'block';
-        updateUIState(false);
-        hideMainInterface();
+        throw error;
     }
 }
 
@@ -195,18 +254,11 @@ function validateAuth() {
 
 // Update UI state based on credentials and authentication
 function updateUIState(configured) {
-    const testAuthBtn = document.getElementById('testAuthBtn');
     const searchBtn = document.getElementById('searchBtn');
     const importSelectedBtn = document.getElementById('importSelectedBtn');
     const importAllBtn = document.getElementById('importAllBtn');
     const searchPhraseInput = document.getElementById('searchPhrase');
     const limitSelect = document.getElementById('limit');
-    
-    if (configured) {
-        testAuthBtn.disabled = false;
-    } else {
-        testAuthBtn.disabled = true;
-    }
     
     // Disable all actions and inputs if not authenticated
     const authenticated = checkAuthentication();
@@ -219,7 +271,7 @@ function updateUIState(configured) {
     if (searchBtn) {
         searchBtn.disabled = !authenticated;
         if (!authenticated) {
-            searchBtn.title = 'Authentication required. Please test connection first.';
+            searchBtn.title = 'Authentication required';
         } else {
             searchBtn.title = '';
         }
@@ -253,7 +305,7 @@ function updateUIState(configured) {
         const selectedCheckboxes = document.querySelectorAll('.offer-checkbox:checked');
         importSelectedBtn.disabled = !authenticated || selectedCheckboxes.length === 0;
         if (!authenticated) {
-            importSelectedBtn.title = 'Authentication required. Please test connection first.';
+            importSelectedBtn.title = 'Authentication required';
         } else {
             importSelectedBtn.title = '';
         }
@@ -262,7 +314,7 @@ function updateUIState(configured) {
     if (importAllBtn) {
         importAllBtn.disabled = !authenticated || currentOffers.length === 0;
         if (!authenticated) {
-            importAllBtn.title = 'Authentication required. Please test connection first.';
+            importAllBtn.title = 'Authentication required';
         } else {
             importAllBtn.title = '';
         }
@@ -276,68 +328,87 @@ async function checkApiStatus() {
         const data = await response.json();
         
         const statusEl = document.getElementById('apiStatus');
-        if (data.configured) {
-            statusEl.textContent = 'Connected';
-            statusEl.className = 'status-value success';
-            showMainInterface();
-            // Don't enable actions until auth is tested
-            updateUIState(true);
-        } else {
-            statusEl.textContent = 'Disconnected';
-            statusEl.className = 'status-value error';
-            isAuthenticated = false;
-            updateUIState(false);
-            hideMainInterface();
+        if (statusEl) {
+            if (data.configured) {
+                statusEl.textContent = 'Configured';
+                statusEl.className = 'status-value success';
+            } else {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'status-value error';
+            }
         }
     } catch (error) {
-        document.getElementById('apiStatus').textContent = 'Error';
-        document.getElementById('apiStatus').className = 'status-value error';
-        isAuthenticated = false;
-        updateUIState(false);
-        hideMainInterface();
+        const statusEl = document.getElementById('apiStatus');
+        if (statusEl) {
+            statusEl.textContent = 'Error';
+            statusEl.className = 'status-value error';
+        }
     }
 }
 
-// Test authentication
+// Test authentication (kept for backward compatibility, but not used in main flow)
 async function testAuthentication() {
     const authStatusEl = document.getElementById('authStatus');
-    authStatusEl.textContent = 'Testing';
-    authStatusEl.className = 'status-value pending';
+    if (authStatusEl) {
+        authStatusEl.textContent = 'Testing';
+        authStatusEl.className = 'status-value pending';
+    }
     
     const clientId = document.getElementById('clientId').value.trim();
     const clientSecret = document.getElementById('clientSecret').value.trim();
     
     if (!clientId || !clientSecret) {
-        authStatusEl.textContent = 'Credentials required';
-        authStatusEl.className = 'status-value error';
+        if (authStatusEl) {
+            authStatusEl.textContent = 'Credentials required';
+            authStatusEl.className = 'status-value error';
+        }
+        showToast('Credentials required', 'error');
         return;
     }
     
     // Ensure credentials are sent to backend
-    await sendCredentialsToBackend(clientId, clientSecret);
+    try {
+        await sendCredentialsToBackend(clientId, clientSecret);
+    } catch (error) {
+        if (authStatusEl) {
+            authStatusEl.textContent = 'Error';
+            authStatusEl.className = 'status-value error';
+        }
+        showToast('Failed to save credentials', 'error');
+        return;
+    }
     
     try {
         const response = await fetch(`${API_BASE}/api/test-auth`);
         const data = await response.json();
         
         if (data.success) {
-            authStatusEl.textContent = 'Authenticated';
-            authStatusEl.className = 'status-value success';
+            if (authStatusEl) {
+                authStatusEl.textContent = 'Authenticated';
+                authStatusEl.className = 'status-value success';
+            }
             isAuthenticated = true;
             updateUIState(true);
+            showToast('Authentication successful', 'success');
             // Auto-load categories when authenticated
             await loadCategories();
         } else {
-            authStatusEl.textContent = 'Failed';
-            authStatusEl.className = 'status-value error';
+            if (authStatusEl) {
+                authStatusEl.textContent = 'Failed';
+                authStatusEl.className = 'status-value error';
+            }
             isAuthenticated = false;
             updateUIState(false);
+            showToast('Authentication failed. Please check your credentials.', 'error');
         }
     } catch (error) {
-        authStatusEl.textContent = 'Error';
-        authStatusEl.className = 'status-value error';
+        if (authStatusEl) {
+            authStatusEl.textContent = 'Error';
+            authStatusEl.className = 'status-value error';
+        }
         isAuthenticated = false;
         updateUIState(false);
+        showToast('Authentication error: ' + (error.message || 'Unknown error'), 'error');
     }
 }
 
