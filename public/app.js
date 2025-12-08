@@ -527,10 +527,20 @@ async function fetchOffers(phrase = '', offset = 0, limit = 20, categoryId = nul
             updatePagination();
             updateImportButtons();
         } else {
-            throw new Error(result.error?.message || 'Failed to fetch product offers');
+            // Show the actual error message from the API
+            const errorMsg = result.error || result.error?.message || 'Failed to fetch product offers';
+            throw new Error(errorMsg);
         }
     } catch (error) {
-        errorEl.textContent = `Failed to fetch product offers: ${error.message || 'Request failed'}`;
+        // Show detailed error message
+        let errorMsg = error.message || 'Request failed';
+        
+        // If it's a network error, provide more context
+        if (error.message === 'Failed to fetch' || error.message === 'NetworkError') {
+            errorMsg = 'Network error: Could not connect to server. Please check your connection.';
+        }
+        
+        errorEl.textContent = `Failed to fetch product offers: ${errorMsg}`;
         errorEl.style.display = 'block';
     } finally {
         loadingEl.style.display = 'none';

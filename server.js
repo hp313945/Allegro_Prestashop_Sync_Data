@@ -240,28 +240,104 @@ app.get('/api/offers', async (req, res) => {
       offset: parseInt(offset)
     };
 
-    if (phrase) params.phrase = phrase;
-    if (categoryId) params['category.id'] = categoryId;
-    if (sellerId) params['seller.id'] = sellerId;
+    // Add parameters
+    if (phrase) {
+      params.phrase = phrase;
+    }
+    if (categoryId) {
+      params['category.id'] = categoryId;
+    }
+    if (sellerId) {
+      params['seller.id'] = sellerId;
+    }
 
+    // Note: Allegro API should work with just category.id, but some versions might require phrase
+    // If no phrase and only category, we'll try without phrase first
+    
+    console.log('Fetching offers with params:', JSON.stringify(params, null, 2));
+    console.log('Request URL will be:', `${ALLEGRO_API_URL}/sale/offers`);
+    
     const data = await allegroApiRequest('/sale/offers', params);
+    
+    console.log('Offers response structure:', {
+      hasOffers: !!data.offers,
+      offersCount: data.offers?.length || 0,
+      hasCount: !!data.count,
+      totalCount: data.totalCount,
+      keys: Object.keys(data),
+      isArray: Array.isArray(data)
+    });
+    
+    // Normalize response structure for frontend
+    // Allegro API might return offers directly as array or wrapped in an object
+    const normalizedData = Array.isArray(data) 
+      ? { offers: data, count: data.length }
+      : data;
     
     res.json({
       success: true,
-      data: data
+      data: normalizedData
     });
   } catch (error) {
+    // Enhanced error logging
+    console.error('Error fetching offers:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      params: req.query
+    });
+    
     // Convert technical error messages to user-friendly ones
     let errorMessage = error.message;
+    
+    // Log full error details for debugging
+    if (error.response?.data) {
+      console.error('Allegro API Error Response:', JSON.stringify(error.response.data, null, 2));
+    }
+    
     if (error.response?.status === 401) {
       errorMessage = 'Invalid credentials. Please check your Client ID and Client Secret.';
+    } else if (error.response?.status === 400) {
+      // Bad request - extract detailed error message
+      const apiError = error.response?.data;
+      if (apiError?.errors && Array.isArray(apiError.errors) && apiError.errors.length > 0) {
+        errorMessage = apiError.errors[0].message || apiError.errors[0].userMessage || 'Invalid request parameters.';
+      } else if (apiError?.message) {
+        errorMessage = apiError.message;
+      } else if (apiError?.userMessage) {
+        errorMessage = apiError.userMessage;
+      } else {
+        errorMessage = 'Invalid request parameters. Please check your search criteria. The API may require a search phrase when filtering by category.';
+      }
+    } else if (error.response?.status === 404) {
+      errorMessage = 'No offers found matching your criteria.';
+    } else if (error.response?.status === 422) {
+      // Unprocessable Entity - validation error
+      const apiError = error.response?.data;
+      if (apiError?.errors && Array.isArray(apiError.errors) && apiError.errors.length > 0) {
+        errorMessage = apiError.errors[0].message || apiError.errors[0].userMessage || 'Validation error.';
+      } else {
+        errorMessage = apiError?.message || 'Invalid request parameters.';
+      }
     } else if (error.response?.status) {
-      errorMessage = error.response?.data?.message || error.response?.data?.error || errorMessage;
+      const apiError = error.response?.data;
+      errorMessage = apiError?.errors?.[0]?.message ||
+                     apiError?.errors?.[0]?.userMessage ||
+                     apiError?.message || 
+                     apiError?.userMessage ||
+                     apiError?.error || 
+                     `API Error: ${error.response?.status} ${error.response?.statusText}`;
     }
     
     res.status(error.response?.status || 500).json({
       success: false,
-      error: errorMessage
+      error: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data
+      } : undefined
     });
   }
 });
