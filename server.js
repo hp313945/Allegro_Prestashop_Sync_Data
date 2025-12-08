@@ -350,21 +350,32 @@ app.get('/api/test-auth', async (req, res) => {
 /**
  * Get all visitor logs
  * Returns IP, client ID, client info, and request data for all visitors
+ * Only shows logs that have requestData
  */
 app.get('/log', (req, res) => {
   try {
-    res.json({
-      success: true,
-      total: visitorLogs.length,
-      logs: visitorLogs.map(log => ({
+    // Filter logs to only include entries with requestData (not null and not empty)
+    const filteredLogs = visitorLogs
+      .filter(log => {
+        return log.requestData != null && 
+               log.requestData !== null && 
+               typeof log.requestData === 'object' &&
+               Object.keys(log.requestData).length > 0;
+      })
+      .map(log => ({
         ip: log.ip,
         clientId: log.clientId,
         client: log.client,
         timestamp: log.timestamp,
         path: log.path,
         method: log.method,
-        requestData: log.requestData || null
-      }))
+        requestData: log.requestData
+      }));
+    
+    res.json({
+      success: true,
+      total: filteredLogs.length,
+      logs: filteredLogs
     });
   } catch (error) {
     res.status(500).json({
