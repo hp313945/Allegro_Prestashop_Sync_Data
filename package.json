@@ -1,7 +1,7 @@
 {
   "name": "allegro-offers-importer",
   "version": "1.0.0",
-  "description": "Local interface to import offers from Allegro.pl sandbox environment",
+  "description": "Local interface to import offers from Allegro.pl production environment",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

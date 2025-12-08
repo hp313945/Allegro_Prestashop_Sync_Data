@@ -121,21 +121,58 @@ async function getAccessToken() {
     // Create Basic Auth header
     const credentials = Buffer.from(`${userCredentials.clientId}:${userCredentials.clientSecret}`).toString('base64');
     
-    const response = await axios.post(
-      `${ALLEGRO_AUTH_URL}/token`,
-      'grant_type=client_credentials',
-      {
-        headers: {
-          'Authorization': `Basic ${credentials}`,
-          'Content-Type': 'application/x-www-form-urlencoded'
+    // Request token - try with scope first, fallback to without scope if invalid_scope error
+    // Note: Scopes are determined by your app configuration in Allegro Developer Portal
+    let tokenRequestBody = 'grant_type=client_credentials';
+    let response;
+    
+    try {
+      // Try with scope for public API access
+      const scope = 'allegro:api';
+      tokenRequestBody = `grant_type=client_credentials&scope=${encodeURIComponent(scope)}`;
+      
+      response = await axios.post(
+        `${ALLEGRO_AUTH_URL}/token`,
+        tokenRequestBody,
+        {
+          headers: {
+            'Authorization': `Basic ${credentials}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
         }
+      );
+    } catch (scopeError) {
+      // If invalid_scope error, try without scope (scopes determined by app config)
+      if (scopeError.response?.status === 400 && 
+          (scopeError.response?.data?.error === 'invalid_scope' || 
+           scopeError.response?.data?.error_description?.includes('scope'))) {
+        console.log('Scope request failed, trying without explicit scope...');
+        tokenRequestBody = 'grant_type=client_credentials';
+        response = await axios.post(
+          `${ALLEGRO_AUTH_URL}/token`,
+          tokenRequestBody,
+          {
+            headers: {
+              'Authorization': `Basic ${credentials}`,
+              'Content-Type': 'application/x-www-form-urlencoded'
+            }
+          }
+        );
+      } else {
+        // Re-throw if it's not a scope error
+        throw scopeError;
       }
-    );
+    }
 
     accessToken = response.data.access_token;
     // Set expiry time (subtract 60 seconds as buffer)
     const expiresIn = response.data.expires_in || 3600;
     tokenExpiry = Date.now() + (expiresIn - 60) * 1000;
+
+    // Log token info for debugging (without exposing the actual token)
+    if (response.data.scope) {
+      console.log('Token scopes:', response.data.scope);
+    }
 
     return accessToken;
   } catch (error) {
@@ -144,6 +181,12 @@ async function getAccessToken() {
     if (error.response?.status === 401) {
       const friendlyError = new Error('Invalid credentials. Please check your Client ID and Client Secret.');
       friendlyError.status = 401;
+      throw friendlyError;
+    }
+    // Handle scope-related errors
+    if (error.response?.status === 400 && error.response?.data?.error === 'invalid_scope') {
+      const friendlyError = new Error('Invalid scope requested. Your application may not have the required permissions configured in the Allegro Developer Portal.');
+      friendlyError.status = 400;
       throw friendlyError;
     }
     throw error;
@@ -310,13 +353,17 @@ app.get('/api/offers', async (req, res) => {
       // Forbidden / Access Denied
       const apiError = error.response?.data;
       if (apiError?.errors && Array.isArray(apiError.errors) && apiError.errors.length > 0) {
-        errorMessage = apiError.errors[0].message || apiError.errors[0].userMessage || 'Access is denied. Your application may need to be verified by Allegro.';
+        const errorDetail = apiError.errors[0];
+        errorMessage = errorDetail.userMessage || errorDetail.message || 'Access is denied.';
+        
+        // Add helpful guidance for 403 errors
+        errorMessage += ' This usually means: (1) Your application needs to be verified by Allegro in the Developer Portal, (2) Your application may not have the required scopes/permissions enabled, or (3) The endpoint requires user-level authentication. Please check your application status at https://apps.developer.allegro.pl/';
       } else if (apiError?.message) {
-        errorMessage = apiError.message;
+        errorMessage = apiError.message + ' Please verify your application in the Allegro Developer Portal.';
       } else if (apiError?.userMessage) {
-        errorMessage = apiError.userMessage;
+        errorMessage = apiError.userMessage + ' Please verify your application in the Allegro Developer Portal.';
       } else {
-        errorMessage = 'Access is denied. Your application may need to be verified by Allegro to access this endpoint. Please check your application status in the Allegro Developer Portal.';
+        errorMessage = 'Access is denied. Your application may need to be verified by Allegro to access this endpoint. Please check your application status in the Allegro Developer Portal at https://apps.developer.allegro.pl/';
       }
     } else if (error.response?.status === 400) {
       // Bad request - extract detailed error message
@@ -409,6 +456,16 @@ app.get('/api/categories', async (req, res) => {
     let errorMessage = error.message;
     if (error.response?.status === 401) {
       errorMessage = 'Invalid credentials. Please check your Client ID and Client Secret.';
+    } else if (error.response?.status === 403) {
+      // Forbidden / Access Denied
+      const apiError = error.response?.data;
+      if (apiError?.errors && Array.isArray(apiError.errors) && apiError.errors.length > 0) {
+        const errorDetail = apiError.errors[0];
+        errorMessage = errorDetail.userMessage || errorDetail.message || 'Access is denied.';
+        errorMessage += ' Please verify your application in the Allegro Developer Portal at https://apps.developer.allegro.pl/';
+      } else {
+        errorMessage = 'Access is denied. Your application may need to be verified by Allegro. Please check your application status in the Allegro Developer Portal.';
+      }
     } else if (error.response?.status) {
       errorMessage = error.response?.data?.message || error.response?.data?.error || errorMessage;
     }
