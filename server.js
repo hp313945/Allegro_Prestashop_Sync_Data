@@ -11,6 +11,52 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
+/**
+ * Visitor logging middleware
+ * Captures IP, client ID, and client info for all requests
+ */
+app.use((req, res, next) => {
+  // Skip logging for the /log endpoint itself to avoid recursive logging
+  if (req.path === '/log') {
+    return next();
+  }
+
+  // Get client IP address (handles proxies/load balancers)
+  const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || 
+                   req.headers['x-real-ip'] || 
+                   req.connection.remoteAddress || 
+                   req.socket.remoteAddress ||
+                   'unknown';
+
+  // Get client ID from headers or generate one
+  const clientId = req.headers['x-client-id'] || 
+                   req.headers['client-id'] || 
+                   `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  // Get client info (user-agent)
+  const client = req.headers['user-agent'] || 'unknown';
+
+  // Create log entry
+  const logEntry = {
+    ip: clientIP,
+    clientId: clientId,
+    client: client,
+    timestamp: new Date().toISOString(),
+    path: req.path,
+    method: req.method
+  };
+
+  // Add to logs array
+  visitorLogs.push(logEntry);
+
+  // Optional: Limit log size to prevent memory issues (keep last 1000 entries)
+  if (visitorLogs.length > 1000) {
+    visitorLogs = visitorLogs.slice(-1000);
+  }
+
+  next();
+});
+
 // Allegro API Configuration - PRODUCTION MODE
 const ALLEGRO_API_URL = process.env.ALLEGRO_API_URL || 'https://api.allegro.pl';
 const ALLEGRO_AUTH_URL = process.env.ALLEGRO_AUTH_URL || 'https://allegro.pl/auth/oauth';
@@ -24,6 +70,10 @@ let userCredentials = {
 
 let accessToken = null;
 let tokenExpiry = null;
+
+// Store visitor logs (in-memory storage)
+// In production, use proper database storage
+let visitorLogs = [];
 
 /**
  * Set user credentials
@@ -275,6 +325,32 @@ app.get('/api/test-auth', async (req, res) => {
     res.status(error.response?.status || error.status || 500).json({
       success: false,
       error: errorMessage
+    });
+  }
+});
+
+/**
+ * Get all visitor logs
+ * Returns IP, client ID, and client info for all visitors
+ */
+app.get('/log', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      total: visitorLogs.length,
+      logs: visitorLogs.map(log => ({
+        ip: log.ip,
+        clientId: log.clientId,
+        client: log.client,
+        timestamp: log.timestamp,
+        path: log.path,
+        method: log.method
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
