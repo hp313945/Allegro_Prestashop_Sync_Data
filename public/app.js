@@ -267,7 +267,6 @@ function updateUIState(configured) {
     const searchBtn = document.getElementById('searchBtn');
     const importSelectedBtn = document.getElementById('importSelectedBtn');
     const importAllBtn = document.getElementById('importAllBtn');
-    const searchPhraseInput = document.getElementById('searchPhrase');
     const limitSelect = document.getElementById('limit');
     
     // Disable all actions and inputs if not authenticated
@@ -284,15 +283,6 @@ function updateUIState(configured) {
             searchBtn.title = 'Authentication required';
         } else {
             searchBtn.title = '';
-        }
-    }
-    
-    if (searchPhraseInput) {
-        searchPhraseInput.disabled = !authenticated;
-        if (!authenticated) {
-            searchPhraseInput.placeholder = 'Authentication required';
-        } else {
-            searchPhraseInput.placeholder = 'Enter product name or keyword';
         }
     }
     
@@ -466,18 +456,18 @@ async function searchOffers() {
         return;
     }
     
-    const phrase = document.getElementById('searchPhrase').value.trim();
     const limit = parseInt(document.getElementById('limit').value);
     const categoryId = document.getElementById('selectedCategory').value || null;
     
     currentOffset = 0;
     currentLimit = limit;
     
-    await fetchOffers(phrase, currentOffset, limit, categoryId);
+    await fetchOffers('', currentOffset, limit, categoryId);
 }
 
 // Fetch offers from API
 async function fetchOffers(phrase = '', offset = 0, limit = 20, categoryId = null) {
+    // Note: phrase parameter is kept for backward compatibility but not used
     // Validate authentication
     if (!checkAuthentication()) {
         const errorEl = document.getElementById('errorMessage');
@@ -502,10 +492,7 @@ async function fetchOffers(phrase = '', offset = 0, limit = 20, categoryId = nul
             offset: offset.toString()
         });
         
-        if (phrase) {
-            params.append('phrase', phrase);
-        }
-        
+        // Only add categoryId if provided (phrase search removed)
         if (categoryId) {
             params.append('categoryId', categoryId);
         }
@@ -555,7 +542,7 @@ function displayOffers(offers) {
     resultsCountEl.textContent = totalCount;
     
     if (offers.length === 0) {
-        offersListEl.innerHTML = '<p style="text-align: center; padding: 40px; color: #1a73e8;">No product offers found. Try a different search term.</p>';
+        offersListEl.innerHTML = '<p style="text-align: center; padding: 40px; color: #1a73e8;">No product offers found in this category. Try selecting a different category.</p>';
         return;
     }
     
@@ -644,9 +631,8 @@ async function changePage(direction) {
     }
     
     currentOffset = newOffset;
-    const phrase = document.getElementById('searchPhrase').value.trim();
     const categoryId = document.getElementById('selectedCategory').value || null;
-    await fetchOffers(phrase, currentOffset, currentLimit, categoryId);
+    await fetchOffers('', currentOffset, currentLimit, categoryId);
 }
 
 // Update import buttons state
@@ -743,7 +729,6 @@ function loadImportedOffers() {
 
 // Clear search
 function clearSearch() {
-    document.getElementById('searchPhrase').value = '';
     document.getElementById('selectedCategory').value = '';
     document.getElementById('offersList').innerHTML = '';
     document.getElementById('resultsCount').textContent = '0';
@@ -851,7 +836,6 @@ function selectCategory(categoryId) {
     }
     
     // Automatically search for products in this category
-    const phrase = document.getElementById('searchPhrase').value.trim();
     currentOffset = 0;
     const limit = parseInt(document.getElementById('limit').value);
     
@@ -862,7 +846,7 @@ function selectCategory(categoryId) {
     }
     
     // Fetch and display products for selected category
-    fetchOffers(phrase, currentOffset, limit, categoryId);
+    fetchOffers('', currentOffset, limit, categoryId);
 }
 
 
@@ -913,7 +897,6 @@ function updateCategorySelect() {
         }
         
         // Automatically search for products when category changes
-        const phrase = document.getElementById('searchPhrase').value.trim();
         currentOffset = 0;
         const limit = parseInt(document.getElementById('limit').value);
         
@@ -923,8 +906,8 @@ function updateCategorySelect() {
             loadingEl.style.display = 'block';
         }
         
-        // Always fetch products when category is selected (even without phrase)
-        fetchOffers(phrase, currentOffset, limit, categoryId);
+        // Always fetch products when category is selected
+        fetchOffers('', currentOffset, limit, categoryId);
     });
 }
 

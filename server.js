@@ -240,19 +240,27 @@ app.get('/api/offers', async (req, res) => {
       offset: parseInt(offset)
     };
 
-    // Add parameters
-    if (phrase) {
-      params.phrase = phrase;
+    // Add parameters - only add if they have values
+    if (phrase && phrase.trim()) {
+      params.phrase = phrase.trim();
     }
-    if (categoryId) {
-      params['category.id'] = categoryId;
+    if (categoryId && categoryId.trim()) {
+      params['category.id'] = categoryId.trim();
     }
-    if (sellerId) {
-      params['seller.id'] = sellerId;
+    if (sellerId && sellerId.trim()) {
+      params['seller.id'] = sellerId.trim();
     }
 
-    // Note: Allegro API should work with just category.id, but some versions might require phrase
-    // If no phrase and only category, we'll try without phrase first
+    // Allegro API requires at least one filter parameter (category.id, phrase, or seller.id)
+    // If only category is provided, that should work
+    // If no parameters at all, we'll return an error
+    
+    if (Object.keys(params).length === 2) { // Only limit and offset
+      return res.status(400).json({
+        success: false,
+        error: 'Please select a category to view products.'
+      });
+    }
     
     console.log('Fetching offers with params:', JSON.stringify(params, null, 2));
     console.log('Request URL will be:', `${ALLEGRO_API_URL}/sale/offers`);
@@ -298,6 +306,18 @@ app.get('/api/offers', async (req, res) => {
     
     if (error.response?.status === 401) {
       errorMessage = 'Invalid credentials. Please check your Client ID and Client Secret.';
+    } else if (error.response?.status === 403) {
+      // Forbidden / Access Denied
+      const apiError = error.response?.data;
+      if (apiError?.errors && Array.isArray(apiError.errors) && apiError.errors.length > 0) {
+        errorMessage = apiError.errors[0].message || apiError.errors[0].userMessage || 'Access is denied. Your application may need to be verified by Allegro.';
+      } else if (apiError?.message) {
+        errorMessage = apiError.message;
+      } else if (apiError?.userMessage) {
+        errorMessage = apiError.userMessage;
+      } else {
+        errorMessage = 'Access is denied. Your application may need to be verified by Allegro to access this endpoint. Please check your application status in the Allegro Developer Portal.';
+      }
     } else if (error.response?.status === 400) {
       // Bad request - extract detailed error message
       const apiError = error.response?.data;
@@ -308,7 +328,7 @@ app.get('/api/offers', async (req, res) => {
       } else if (apiError?.userMessage) {
         errorMessage = apiError.userMessage;
       } else {
-        errorMessage = 'Invalid request parameters. Please check your search criteria. The API may require a search phrase when filtering by category.';
+        errorMessage = 'Invalid request parameters. Please check your search criteria.';
       }
     } else if (error.response?.status === 404) {
       errorMessage = 'No offers found matching your criteria.';
