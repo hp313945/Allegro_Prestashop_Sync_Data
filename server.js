@@ -288,9 +288,18 @@ app.get('/api/offers', async (req, res) => {
     }
 
     // Allegro /sale/products API requires at least 'phrase' OR 'ean' parameter
+    // phrase must be at least 2 characters long (max 1024)
     // category.id can only be used when searching by phrase
-    if (phrase && phrase.trim()) {
-      params.phrase = phrase.trim();
+    let searchPhrase = phrase && phrase.trim() ? phrase.trim() : '';
+    
+    // If category is selected but no phrase provided, use minimal valid phrase (2 spaces)
+    // This allows category filtering while meeting API minimum length requirement
+    if (categoryId && categoryId.trim() && (!searchPhrase || searchPhrase.length < 2)) {
+      searchPhrase = '  '; // Two spaces - minimum valid length
+    }
+    
+    if (searchPhrase && searchPhrase.length >= 2) {
+      params.phrase = searchPhrase;
       // category.id can only be used with phrase
       if (categoryId && categoryId.trim()) {
         params['category.id'] = categoryId.trim();
@@ -299,10 +308,10 @@ app.get('/api/offers', async (req, res) => {
       params.ean = ean.trim();
       // category.id cannot be used with ean search
     } else {
-      // If no phrase or ean provided, return error
+      // If no valid phrase or ean provided, return error
       return res.status(400).json({
         success: false,
-        error: 'Please provide a search phrase or select a category to view products. The products API requires at least a phrase parameter.'
+        error: 'Please provide a search phrase (at least 2 characters) or select a category to view products. The products API requires at least a phrase parameter with minimum 2 characters.'
       });
     }
 

@@ -467,14 +467,14 @@ async function searchOffers() {
     currentLimit = limit;
     currentNextPage = null;
     pageHistory = [];
-    currentPhrase = ''; // Will be set to '*' if category selected
+    currentPhrase = ''; // Will be set to '  ' (two spaces) if category selected
     
     await fetchOffers('', currentOffset, limit, categoryId, null);
 }
 
 // Fetch offers from API
-// Note: Allegro /sale/products API requires at least 'phrase' parameter
-// When category is selected, we use "*" as a wildcard phrase to get all products in that category
+// Note: Allegro /sale/products API requires at least 'phrase' parameter (min 2 chars)
+// When category is selected, we use "  " (two spaces) as a minimal valid phrase to get all products in that category
 async function fetchOffers(phrase = '', offset = 0, limit = 20, categoryId = null, pageId = null) {
     // Validate authentication
     if (!checkAuthentication()) {
@@ -497,12 +497,19 @@ async function fetchOffers(phrase = '', offset = 0, limit = 20, categoryId = nul
     try {
         const params = new URLSearchParams();
         
-        // Allegro /sale/products API requires at least 'phrase' parameter
-        // If category is selected but no phrase provided, use "*" as wildcard
-        // If phrase is provided, use it
-        const searchPhrase = phrase && phrase.trim() ? phrase.trim() : (categoryId ? '*' : '');
+        // Allegro /sale/products API requires at least 'phrase' parameter (minimum 2 characters)
+        // If category is selected but no phrase provided, use "  " (two spaces) as minimal valid phrase
+        // If phrase is provided, use it (but ensure it's at least 2 chars)
+        let searchPhrase = phrase && phrase.trim() ? phrase.trim() : '';
         
-        if (searchPhrase) {
+        // If we have a category but no phrase, use minimal valid phrase (2 spaces)
+        // This allows category filtering to work while meeting API requirements
+        if (categoryId && !searchPhrase) {
+            searchPhrase = '  '; // Two spaces - minimum valid length
+        }
+        
+        // Ensure phrase meets minimum length requirement (2 chars)
+        if (searchPhrase && searchPhrase.length >= 2) {
             params.append('phrase', searchPhrase);
         }
         
@@ -536,7 +543,10 @@ async function fetchOffers(phrase = '', offset = 0, limit = 20, categoryId = nul
             currentNextPage = result.data.nextPage || null;
             
             // Update current phrase for pagination
-            const searchPhrase = phrase && phrase.trim() ? phrase.trim() : (categoryId ? '*' : '');
+            let searchPhrase = phrase && phrase.trim() ? phrase.trim() : '';
+            if (categoryId && !searchPhrase) {
+                searchPhrase = '  '; // Two spaces - minimum valid length
+            }
             currentPhrase = searchPhrase;
             
             displayOffers(currentOffers);
@@ -904,7 +914,7 @@ function selectCategory(categoryId) {
     currentOffset = 0;
     currentNextPage = null;
     pageHistory = [];
-    currentPhrase = '*'; // Use wildcard when category selected
+    currentPhrase = '  '; // Use minimal valid phrase (2 spaces) when category selected
     const limit = parseInt(document.getElementById('limit').value);
     
     // Show loading indicator
@@ -914,7 +924,8 @@ function selectCategory(categoryId) {
     }
     
     // Fetch and display products for selected category
-    fetchOffers('*', currentOffset, limit, categoryId, null);
+    // Pass empty phrase - fetchOffers will use '  ' (two spaces) when category is selected
+    fetchOffers('', currentOffset, limit, categoryId, null);
 }
 
 
@@ -969,7 +980,7 @@ function updateCategorySelect() {
         currentOffset = 0;
         currentNextPage = null;
         pageHistory = [];
-        currentPhrase = categoryId ? '*' : '';
+        currentPhrase = categoryId ? '  ' : ''; // Use minimal valid phrase (2 spaces) when category selected
         const limit = parseInt(document.getElementById('limit').value);
         
         // Show loading indicator
@@ -979,8 +990,8 @@ function updateCategorySelect() {
         }
         
         // Always fetch products when category is selected
-        // Use '*' as phrase when category is selected (required by API)
-        fetchOffers(categoryId ? '*' : '', currentOffset, limit, categoryId, null);
+        // Pass empty phrase - fetchOffers will use '  ' (two spaces) when category is selected
+        fetchOffers('', currentOffset, limit, categoryId, null);
     });
 }
 
