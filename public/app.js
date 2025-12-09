@@ -1381,54 +1381,24 @@ async function loadCategories() {
 // Fetch product count for a category
 async function fetchCategoryProductCount(categoryId) {
     try {
-        let totalCount = 0;
-        let nextPageId = null;
-        let currentPage = 0;
-        const maxPages = 1000; // Safety limit to prevent infinite loops
+        const params = new URLSearchParams();
+        params.append('phrase', 'produkt');
+        params.append('categoryId', categoryId);
+        params.append('limit', '30'); // Fetch up to 30 to get a better count estimate
         
-        // Paginate through all pages to get total count
-        do {
-            const params = new URLSearchParams();
-            params.append('phrase', 'produkt');
-            params.append('categoryId', categoryId);
-            params.append('limit', '30'); // Use max limit to minimize requests
-            
-            if (nextPageId) {
-                params.append('pageId', nextPageId);
-            }
-            
-            const response = await fetch(`${API_BASE}/api/offers?${params}`);
-            if (!response.ok) {
-                console.error(`Error fetching page ${currentPage + 1} for category ${categoryId}:`, response.status);
-                break;
-            }
-            
-            const result = await response.json();
-            if (result.success && result.data) {
-                const pageProducts = result.data.offers || [];
-                const productsOnPage = pageProducts.length;
-                totalCount += productsOnPage;
-                
-                // Check if there's a next page
-                nextPageId = result.data.nextPage?.id || null;
-                currentPage++;
-                
-                // If we got fewer than 30 products, we've reached the last page
-                if (productsOnPage < 30) {
-                    break;
-                }
-            } else {
-                break;
-            }
-            
-            // Safety check to prevent infinite loops
-            if (currentPage >= maxPages) {
-                console.warn(`Reached max pages limit (${maxPages}) for category ${categoryId}`);
-                break;
-            }
-        } while (nextPageId);
+        const response = await fetch(`${API_BASE}/api/offers?${params}`);
+        if (!response.ok) return 0;
         
-        return totalCount;
+        const result = await response.json();
+        if (result.success && result.data) {
+            const count = result.data.count || result.data.offers?.length || 0;
+            // If we got 30 products, there might be more - show "30+"
+            if (count === 30 && result.data.nextPage) {
+                return '30+';
+            }
+            return count;
+        }
+        return 0;
     } catch (error) {
         console.error(`Error fetching count for category ${categoryId}:`, error);
         return 0;
@@ -1463,19 +1433,11 @@ async function displayCategories(categories) {
         });
     });
     
-    // Fetch product counts for all categories with controlled concurrency
-    // Each count updates as soon as it's ready, without blocking others
-    const maxConcurrent = 10; // Limit to 10 concurrent requests
-    let activeCount = 0;
-    let categoryIndex = 0;
-    
-    const fetchNextCategory = async () => {
-        if (categoryIndex >= categories.length) return;
-        
-        const category = categories[categoryIndex++];
-        activeCount++;
-        
-        try {
+    // Fetch product counts for all categories in parallel (limit concurrent requests)
+    const batchSize = 5; // Process 5 categories at a time to avoid overwhelming the API
+    for (let i = 0; i < categories.length; i += batchSize) {
+        const batch = categories.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (category) => {
             const count = await fetchCategoryProductCount(category.id);
             const countEl = document.querySelector(`.category-item-count[data-category-id="${category.id}"]`);
             if (countEl) {
@@ -1487,24 +1449,7 @@ async function displayCategories(categories) {
                     countEl.textContent = `(${count})`;
                 }
             }
-        } catch (error) {
-            console.error(`Error fetching count for category ${category.id}:`, error);
-            const countEl = document.querySelector(`.category-item-count[data-category-id="${category.id}"]`);
-            if (countEl) {
-                countEl.textContent = '(?)';
-            }
-        } finally {
-            activeCount--;
-            // Start next category fetch
-            if (categoryIndex < categories.length) {
-                fetchNextCategory();
-            }
-        }
-    };
-    
-    // Start initial batch of concurrent requests
-    for (let i = 0; i < Math.min(maxConcurrent, categories.length); i++) {
-        fetchNextCategory();
+        }));
     }
 }
 
