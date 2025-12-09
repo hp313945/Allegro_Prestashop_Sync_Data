@@ -838,59 +838,60 @@ function createOfferCard(product) {
                 `}
             </div>
             <div class="offer-content">
-                ${badges.length > 0 ? `
-                    <div class="offer-badges">
-                        ${badges.map(badge => {
-                            if (badge === 'SMART') {
-                                return `<span class="offer-badge badge-smart">${badge}</span>`;
-                            } else if (badge === 'SUPER PRICE') {
-                                return `<span class="offer-badge badge-super-price">${badge}</span>`;
-                            } else if (badge === 'LOWEST PRICE') {
-                                return `<span class="badge-lowest-price">Lowest price guarantee</span>`;
-                            }
-                            return '';
-                        }).join('')}
-                    </div>
-                ` : ''}
-                
-                ${formattedCurrentPrice ? `
-                    <div class="offer-pricing">
-                        ${hasDiscount && formattedOriginalPrice ? `
-                            <div class="price-row">
-                                <span class="discount-badge">-${discountPercent}%</span>
-                                <span class="original-price">${formattedOriginalPrice} PLN</span>
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+                    <div style="flex: 1;">
+                        ${badges.length > 0 ? `
+                            <div class="offer-badges">
+                                ${badges.map(badge => {
+                                    if (badge === 'SMART') {
+                                        return `<span class="offer-badge badge-smart">${badge}</span>`;
+                                    } else if (badge === 'SUPER PRICE') {
+                                        return `<span class="offer-badge badge-super-price">${badge}</span>`;
+                                    } else if (badge === 'LOWEST PRICE') {
+                                        return `<span class="badge-lowest-price">Lowest price guarantee</span>`;
+                                    }
+                                    return '';
+                                }).join('')}
                             </div>
-                        ` : ''}
-                        <div class="price-row">
-                            <span class="current-price">${formattedCurrentPrice}</span>
-                            <span class="price-currency">PLN</span>
-                        </div>
-                        ${product.priceHistory || product.price?.history ? `
-                            <div class="price-info">
-                                <span class="price-info-icon" title="30-day price history">i</span>
-                                <span>30-day price</span>
+                        ` : '<span class="no-data-text">none yet</span>'}
+                    </div>
+                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 3px;">
+                        ${formattedCurrentPrice ? `
+                            ${hasDiscount && formattedOriginalPrice ? `
+                                <div class="price-row" style="justify-content: flex-end;">
+                                    <span class="discount-badge">-${discountPercent}%</span>
+                                    <span class="original-price">${formattedOriginalPrice} PLN</span>
+                                </div>
+                            ` : ''}
+                            <div class="price-row" style="justify-content: flex-end;">
+                                <span class="current-price">${formattedCurrentPrice}</span>
+                                <span class="price-currency">PLN</span>
+                                ${badges.includes('SMART') ? `<span class="offer-badge badge-smart" style="margin-left: 4px;">SMART</span>` : ''}
                             </div>
-                        ` : ''}
+                            ${product.priceHistory || product.price?.history ? `
+                                <div class="price-info" style="justify-content: flex-end;">
+                                    <span class="price-info-icon" title="30-day price history">i</span>
+                                    <span>30-day price</span>
+                                </div>
+                            ` : ''}
+                        ` : `
+                            <div class="price-row" style="justify-content: flex-end;">
+                                <span class="price-note">See offers for price</span>
+                            </div>
+                        `}
                     </div>
-                ` : `
-                    <div class="offer-pricing">
-                        <div class="price-row">
-                            <span class="price-note">See offers for price</span>
-                        </div>
-                    </div>
-                `}
+                </div>
                 
                 <div class="offer-header">
                     <h3 class="offer-title">${escapeHtml(productName)}</h3>
                     <input type="checkbox" class="offer-checkbox" data-product-id="${productId}">
                 </div>
                 
-                ${paymentInfo || deliveryInfo ? `
-                    <div class="offer-details">
-                        ${paymentInfo ? `<div class="payment-info">${paymentInfo}</div>` : ''}
-                        ${deliveryInfo ? `<div class="delivery-info">${deliveryInfo}</div>` : ''}
-                    </div>
-                ` : ''}
+                <div class="offer-details">
+                    ${paymentInfo ? `<div class="payment-info">${paymentInfo}</div>` : ''}
+                    ${deliveryInfo ? `<div class="delivery-info">${deliveryInfo}</div>` : ''}
+                    ${!paymentInfo && !deliveryInfo ? '<div class="no-data-text">none yet</div>' : ''}
+                </div>
                 
                 <div class="offer-info">
                     <div class="offer-info-row">
