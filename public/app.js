@@ -741,6 +741,15 @@ function createOfferCard(product) {
     // Category ID
     const categoryId = product.category?.id || 'N/A';
     
+    // Get category name from allCategories array
+    let categoryName = 'N/A';
+    if (categoryId !== 'N/A' && allCategories && allCategories.length > 0) {
+        const category = allCategories.find(cat => cat.id === categoryId);
+        if (category && category.name) {
+            categoryName = category.name;
+        }
+    }
+    
     // Product name
     const productName = product.name || 'Untitled Product';
     
@@ -838,29 +847,29 @@ function createOfferCard(product) {
                 `}
             </div>
             <div class="offer-content">
-                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
-                    <div style="flex: 1;">
-                        ${badges.length > 0 ? `
-                            <div class="offer-badges">
-                                ${badges.map(badge => {
-                                    if (badge === 'SMART') {
-                                        return `<span class="offer-badge badge-smart">${badge}</span>`;
-                                    } else if (badge === 'SUPER PRICE') {
-                                        return `<span class="offer-badge badge-super-price">${badge}</span>`;
-                                    } else if (badge === 'LOWEST PRICE') {
-                                        return `<span class="badge-lowest-price">Lowest price guarantee</span>`;
-                                    }
-                                    return '';
-                                }).join('')}
-                            </div>
-                        ` : '<span class="no-data-text">none yet</span>'}
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
+                    <div style="flex: 1; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
+                        ${badges.length > 0 ? badges.map(badge => {
+                            if (badge === 'SMART') {
+                                return `<span class="offer-badge badge-smart">${badge}</span>`;
+                            } else if (badge === 'SUPER PRICE') {
+                                return `<span class="offer-badge badge-super-price">${badge}</span>`;
+                            } else if (badge === 'LOWEST PRICE') {
+                                return `<span class="badge-lowest-price">Lowest price guarantee</span>`;
+                            }
+                            return '';
+                        }).join('') : '<span class="no-data-text">none yet</span>'}
                     </div>
-                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 3px;">
+                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px;">
                         ${formattedCurrentPrice ? `
                             ${hasDiscount && formattedOriginalPrice ? `
-                                <div class="price-row" style="justify-content: flex-end;">
+                                <div class="price-row" style="justify-content: flex-end; margin-bottom: 2px;">
                                     <span class="discount-badge">-${discountPercent}%</span>
                                     <span class="original-price">${formattedOriginalPrice} PLN</span>
+                                </div>
+                                <div class="price-info" style="justify-content: flex-end; margin-bottom: 2px;">
+                                    <span class="price-info-icon" title="30-day price history">i</span>
+                                    <span>30-day price</span>
                                 </div>
                             ` : ''}
                             <div class="price-row" style="justify-content: flex-end;">
@@ -868,14 +877,9 @@ function createOfferCard(product) {
                                 <span class="price-currency">PLN</span>
                                 ${badges.includes('SMART') ? `<span class="offer-badge badge-smart" style="margin-left: 4px;">SMART</span>` : ''}
                             </div>
-                            ${product.priceHistory || product.price?.history ? `
-                                <div class="price-info" style="justify-content: flex-end;">
-                                    <span class="price-info-icon" title="30-day price history">i</span>
-                                    <span>30-day price</span>
-                                </div>
-                            ` : ''}
                         ` : `
                             <div class="price-row" style="justify-content: flex-end;">
+                                <input type="checkbox" class="offer-checkbox" data-product-id="${productId}" style="margin-right: 4px;">
                                 <span class="price-note">See offers for price</span>
                             </div>
                         `}
@@ -884,12 +888,22 @@ function createOfferCard(product) {
                 
                 <div class="offer-header">
                     <h3 class="offer-title">${escapeHtml(productName)}</h3>
-                    <input type="checkbox" class="offer-checkbox" data-product-id="${productId}">
+                    ${!formattedCurrentPrice ? '' : `<input type="checkbox" class="offer-checkbox" data-product-id="${productId}">`}
                 </div>
                 
                 <div class="offer-details">
-                    ${paymentInfo ? `<div class="payment-info">${paymentInfo}</div>` : ''}
-                    ${deliveryInfo ? `<div class="delivery-info">${deliveryInfo}</div>` : ''}
+                    ${paymentInfo ? `
+                        <div class="payment-info">
+                            <span>pay later with</span>
+                            <span class="pay-badge">PAY</span>
+                        </div>
+                    ` : ''}
+                    ${deliveryInfo ? `
+                        <div class="delivery-info">
+                            <span>${deliveryInfo}</span>
+                            <span class="delivery-info-icon" title="Delivery details">i</span>
+                        </div>
+                    ` : ''}
                     ${!paymentInfo && !deliveryInfo ? '<div class="no-data-text">none yet</div>' : ''}
                 </div>
                 
@@ -899,8 +913,8 @@ function createOfferCard(product) {
                         <span class="info-value product-id">${productId.substring(0, 8)}...</span>
                     </div>
                     <div class="offer-info-row">
-                        <span class="info-label">Category ID:</span>
-                        <span class="info-value category-id">${categoryId}</span>
+                        <span class="info-label">Category:</span>
+                        <span class="info-value category-id">${escapeHtml(categoryName)}</span>
                     </div>
                 </div>
             </div>
