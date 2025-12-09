@@ -12,6 +12,7 @@ let currentNextPage = null; // For cursor-based pagination
 let pageHistory = []; // Track page history for going back
 let currentPhrase = ''; // Track current search phrase
 let currentPageNumber = 1; // Track current page number
+let priceInfoMessageShown = false; // Track if price info message has been shown in this session
 
 // API Base URL
 const API_BASE = '';
@@ -140,6 +141,7 @@ async function saveCredentials() {
             
             // Set authenticated state
             isAuthenticated = true;
+            priceInfoMessageShown = false; // Reset message flag for new authentication
             const authStatusEl = document.getElementById('authStatus');
             if (authStatusEl) {
                 authStatusEl.textContent = 'Authenticated';
@@ -260,12 +262,20 @@ function clearCredentials() {
         authStatusEl.className = 'status-value';
     }
     isAuthenticated = false;
+    priceInfoMessageShown = false; // Reset message flag when disconnecting
     updateUIState(false);
     
     // Hide disconnect button in header
     const clearBtnHeader = document.getElementById('clearCredentialsBtnHeader');
     if (clearBtnHeader) {
         clearBtnHeader.style.display = 'none';
+    }
+    
+    // Hide price info message
+    const priceInfoMessage = document.getElementById('priceInfoMessage');
+    if (priceInfoMessage) {
+        priceInfoMessage.style.display = 'none';
+        priceInfoMessage.style.marginBottom = '0';
     }
 }
 
@@ -423,6 +433,7 @@ async function testAuthentication() {
                 authStatusEl.className = 'status-value success';
             }
             isAuthenticated = true;
+            priceInfoMessageShown = false; // Reset message flag for new authentication
             updateUIState(true);
             showToast('Authentication successful', 'success');
             // Auto-load categories when authenticated
@@ -653,11 +664,15 @@ async function displayOffers(offers) {
     
     resultsCountEl.textContent = totalCount;
     
-    // Show and start timer for price info message
-    const priceInfoMessage = document.getElementById('priceInfoMessage');
-    if (priceInfoMessage) {
-        priceInfoMessage.style.display = 'flex';
-        startPriceInfoMessageTimer();
+    // Show price info message only once per authentication session
+    if (!priceInfoMessageShown && isAuthenticated) {
+        const priceInfoMessage = document.getElementById('priceInfoMessage');
+        if (priceInfoMessage) {
+            priceInfoMessage.style.display = 'flex';
+            priceInfoMessage.style.marginBottom = '20px';
+            priceInfoMessageShown = true;
+            startPriceInfoMessageTimer();
+        }
     }
     
     if (offers.length === 0) {
@@ -1184,6 +1199,10 @@ function displayImportedOffers() {
         }
         
         const productName = offer.name || 'Untitled Product';
+        // Truncate product name to keep it short
+        const shortName = productName.length > 50 ? productName.substring(0, 47) + '...' : productName;
+        // Shorten product ID for display
+        const shortId = offer.id.length > 12 ? offer.id.substring(0, 8) + '...' : offer.id;
         
         return `
         <div class="imported-item" data-offer-id="${offer.id}">
@@ -1202,8 +1221,8 @@ function displayImportedOffers() {
                 `}
             </div>
             <div class="imported-item-content">
-                <div class="imported-item-title">${escapeHtml(productName)}</div>
-                <div class="imported-item-id">ID: ${offer.id}</div>
+                <div class="imported-item-title">${escapeHtml(shortName)}</div>
+                <div class="imported-item-id">ID: ${shortId}</div>
             </div>
             <button class="imported-item-remove" onclick="removeImportedOffer('${offer.id}')" title="Remove product">
                 <span>×</span>
