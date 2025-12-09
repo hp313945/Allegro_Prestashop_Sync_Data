@@ -4,6 +4,7 @@ let importedOffers = [];
 let currentOffset = 0; // Kept for display purposes
 let currentLimit = 20;
 let totalCount = 0; // Current page product count
+let totalProductsSeen = 0; // Total products seen across all pages in current category
 let isAuthenticated = false;
 let allCategories = [];
 let selectedCategoryId = null;
@@ -494,6 +495,7 @@ async function searchOffers() {
     pageHistory = [];
     currentPhrase = ''; // Will be set to 'aa' by server if category selected
     currentPageNumber = 1; // Reset to first page
+    totalProductsSeen = 0; // Reset total products seen
     
     await fetchOffers('', currentOffset, limit, categoryId, null);
 }
@@ -568,6 +570,13 @@ async function fetchOffers(phrase = '', offset = 0, limit = 20, categoryId = nul
         if (result.success) {
             currentOffers = result.data.offers || [];
             totalCount = currentOffers.length; // Count of products on current page
+            
+            // Update total products seen (reset on first page, accumulate on subsequent pages)
+            if (currentPageNumber === 1) {
+                totalProductsSeen = totalCount;
+            } else {
+                totalProductsSeen += totalCount;
+            }
             
             // Store nextPage for pagination
             currentNextPage = result.data.nextPage || null;
@@ -1000,6 +1009,7 @@ function createOfferCard(product) {
 function updatePagination() {
     const paginationEl = document.getElementById('pagination');
     const pageInfoEl = document.getElementById('pageInfo');
+    const totalCountInfoEl = document.getElementById('totalCountInfo');
     const prevBtn = document.getElementById('prevBtn');
     const nextBtn = document.getElementById('nextBtn');
     
@@ -1016,14 +1026,19 @@ function updatePagination() {
     let pageInfoText = `Page ${currentPageNumber}`;
     
     if (totalCount > 0) {
-        pageInfoText += ` (${totalCount} product${totalCount !== 1 ? 's' : ''})`;
-    }
-    
-    if (hasMorePages) {
-        pageInfoText += ' - More available';
+        pageInfoText += ` (${totalCount} product${totalCount !== 1 ? 's' : ''} on this page)`;
     }
     
     pageInfoEl.textContent = pageInfoText;
+    
+    // Show total count info
+    if (totalCountInfoEl) {
+        if (hasMorePages) {
+            totalCountInfoEl.textContent = `Total: ${totalProductsSeen}+ products`;
+        } else {
+            totalCountInfoEl.textContent = `Total: ${totalProductsSeen} product${totalProductsSeen !== 1 ? 's' : ''}`;
+        }
+    }
     
     // Prev button: enabled if we have history to go back to (not on first page)
     prevBtn.disabled = currentPageNumber === 1;
@@ -1062,6 +1077,7 @@ async function changePage(direction) {
             currentOffset = 0;
             currentNextPage = null;
             currentPageNumber = 1;
+            totalProductsSeen = 0;
             await fetchOffers(currentPhrase, 0, currentLimit, categoryId, null);
         } else {
             // Go back to previous page
@@ -1071,6 +1087,7 @@ async function changePage(direction) {
             currentOffset = 0;
             currentNextPage = null;
             currentPageNumber = 1;
+            totalProductsSeen = 0;
             await fetchOffers(currentPhrase, 0, currentLimit, categoryId, null);
         }
     }
@@ -1236,6 +1253,7 @@ function clearSearch() {
     currentPhrase = '';
     selectedCategoryId = null;
     currentPageNumber = 1; // Reset to first page
+    totalProductsSeen = 0;
     updateImportButtons();
 }
 
@@ -1340,6 +1358,7 @@ function selectCategory(categoryId) {
         pageHistory = [];
         currentPhrase = 'produkt'; // Use meaningful phrase when category selected (server will set this)
         currentPageNumber = 1; // Reset to first page
+        totalProductsSeen = 0;
         const limit = parseInt(document.getElementById('limit').value);
     
     // Show loading indicator
@@ -1407,6 +1426,7 @@ function updateCategorySelect() {
         pageHistory = [];
         currentPhrase = categoryId ? 'produkt' : ''; // Use meaningful phrase when category selected (server will set this)
         currentPageNumber = 1; // Reset to first page
+        totalProductsSeen = 0;
         const limit = parseInt(document.getElementById('limit').value);
         
         // Show loading indicator
@@ -1441,6 +1461,7 @@ function clearCategorySelection() {
     pageHistory = [];
     currentPhrase = '';
     currentPageNumber = 1; // Reset to first page
+    totalProductsSeen = 0;
     updateImportButtons();
 }
 
@@ -1457,6 +1478,9 @@ function closePriceInfoMessage() {
         messageEl.classList.add('hiding');
         setTimeout(() => {
             messageEl.style.display = 'none';
+            messageEl.classList.remove('hiding');
+            // Remove margin to prevent empty space
+            messageEl.style.marginBottom = '0';
         }, 300);
     }
 }

@@ -108,13 +108,7 @@
                     <div class="info-message" id="priceInfoMessage">
                         <div class="info-message-icon">ℹ</div>
                         <div class="info-message-content">
-                            <strong>Why Price Information is Not Available:</strong>
-                            <br>
                             Your account is currently set up as a regular user account. To see product prices, you'll need to switch your account to a selling role in the Allegro Developer Portal. Once you do that, you'll be able to access pricing information.
-                            <br><br>
-                            <strong>What Information You Can Access Now:</strong>
-                            <br>
-                            Right now, you can see: Product names, images, categories, product IDs, delivery options, payment methods, and promotional badges (like SMART and SUPER PRICE).
                         </div>
                         <button class="info-message-close" onclick="closePriceInfoMessage()" title="Close">×</button>
                     </div>
@@ -126,13 +120,16 @@
 
                     <div id="errorMessage" class="error-message" style="display: none;"></div>
 
-                    <div id="offersList" class="offers-grid"></div>
-
                     <div class="pagination" id="pagination" style="display: none;">
-                        <button id="prevBtn" class="btn btn-secondary" disabled>Prev</button>
-                        <span id="pageInfo">Page 1</span>
-                        <button id="nextBtn" class="btn btn-secondary" disabled>Next</button>
+                        <div>
+                            <button id="prevBtn" class="btn btn-secondary" disabled>Prev</button>
+                            <span id="pageInfo">Page 1</span>
+                            <button id="nextBtn" class="btn btn-secondary" disabled>Next</button>
+                        </div>
+                        <span id="totalCountInfo" class="total-count-info"></span>
                     </div>
+
+                    <div id="offersList" class="offers-grid"></div>
                 </div>
 
                 <!-- Imported Products Section -->
