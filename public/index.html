@@ -105,13 +105,18 @@
                         </div>
                     </div>
                     
-                    <div class="info-message">
+                    <div class="info-message" id="priceInfoMessage">
                         <div class="info-message-icon">ℹ</div>
                         <div class="info-message-content">
-                            <strong>Price Information:</strong> The Allegro Products API (/sale/products) does not provide price information for products. Prices are only available through the Offers API (/sale/offers) which requires offer-specific access. 
+                            <strong>Why Price Information is Not Available:</strong>
+                            <br>
+                            Your account is currently set up as a regular user account. To see product prices, you'll need to switch your account to a selling role in the Allegro Developer Portal. Once you do that, you'll be able to access pricing information.
                             <br><br>
-                            <strong>Available Information:</strong> Product name, images, category, product ID, delivery options, payment methods, and promotional badges (SMART, SUPER PRICE, etc.).
+                            <strong>What Information You Can Access Now:</strong>
+                            <br>
+                            Right now, you can see: Product names, images, categories, product IDs, delivery options, payment methods, and promotional badges (like SMART and SUPER PRICE).
                         </div>
+                        <button class="info-message-close" onclick="closePriceInfoMessage()" title="Close">×</button>
                     </div>
 
                     <div id="loadingIndicator" class="loading" style="display: none;">

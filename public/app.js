@@ -644,6 +644,13 @@ async function displayOffers(offers) {
     
     resultsCountEl.textContent = totalCount;
     
+    // Show and start timer for price info message
+    const priceInfoMessage = document.getElementById('priceInfoMessage');
+    if (priceInfoMessage) {
+        priceInfoMessage.style.display = 'flex';
+        startPriceInfoMessageTimer();
+    }
+    
     if (offers.length === 0) {
         offersListEl.innerHTML = '<p style="text-align: center; padding: 40px; color: #1a73e8;">No product offers found in this category. Try selecting a different category.</p>';
         return;
@@ -1435,6 +1442,37 @@ function clearCategorySelection() {
     currentPhrase = '';
     currentPageNumber = 1; // Reset to first page
     updateImportButtons();
+}
+
+// Close price info message
+function closePriceInfoMessage() {
+    // Clear the auto-close timer if it exists
+    if (priceInfoMessageTimer) {
+        clearTimeout(priceInfoMessageTimer);
+        priceInfoMessageTimer = null;
+    }
+    
+    const messageEl = document.getElementById('priceInfoMessage');
+    if (messageEl) {
+        messageEl.classList.add('hiding');
+        setTimeout(() => {
+            messageEl.style.display = 'none';
+        }, 300);
+    }
+}
+
+// Auto-close price info message after 15 seconds
+let priceInfoMessageTimer = null;
+function startPriceInfoMessageTimer() {
+    // Clear any existing timer
+    if (priceInfoMessageTimer) {
+        clearTimeout(priceInfoMessageTimer);
+    }
+    
+    // Set new timer for 15 seconds
+    priceInfoMessageTimer = setTimeout(() => {
+        closePriceInfoMessage();
+    }, 15000);
 }
 
 // Utility functions
