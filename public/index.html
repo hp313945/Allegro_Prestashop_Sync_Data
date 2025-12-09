@@ -7,107 +7,130 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="container">
-        <header>
+    <!-- Credentials Section (shown initially) -->
+    <div class="credentials-overlay" id="credentialsOverlay">
+        <div class="credentials-modal">
             <h1>Allegro Importer</h1>
             <p class="subtitle">Search and import product offers from Allegro marketplace</p>
+            
+            <div class="credentials-section">
+                <h2>API Credentials</h2>
+                <div class="credentials-form">
+                    <div class="form-group">
+                        <label for="clientId">Client ID</label>
+                        <input type="text" id="clientId" placeholder="Client ID" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="clientSecret">Client Secret</label>
+                        <input type="password" id="clientSecret" placeholder="Client Secret" autocomplete="off">
+                    </div>
+                    <button id="saveCredentialsBtn" class="btn btn-primary">CONNECT</button>
+                    <button id="clearCredentialsBtn" class="btn btn-secondary" style="display: none;">Clear</button>
+                </div>
+                <div id="credentialsMessage" class="message" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Application Layout -->
+    <div id="mainApp" class="main-app" style="display: none;">
+        <!-- Top Header with User Info -->
+        <header class="top-header">
+            <div class="header-content">
+                <div class="app-title">
+                    <h1>Allegro Importer</h1>
+                    <p class="subtitle">Product Search & Import</p>
+                </div>
+                <div class="user-info">
+                    <div class="status-item">
+                        <span class="status-label">Status</span>
+                        <span id="apiStatus" class="status-value">Disconnected</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Auth</span>
+                        <span id="authStatus" class="status-value">Pending</span>
+                    </div>
+                    <button id="clearCredentialsBtnHeader" class="btn btn-secondary btn-small" style="display: none;">Disconnect</button>
+                </div>
+            </div>
         </header>
 
-        <div class="credentials-section">
-            <h2>API Credentials</h2>
-            <div class="credentials-form">
-                <div class="form-group">
-                    <label for="clientId">Client ID</label>
-                    <input type="text" id="clientId" placeholder="Client ID" autocomplete="off">
+        <!-- Main Content Area -->
+        <div class="main-content-wrapper">
+            <!-- Left Sidebar - Categories -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h2>Shop by Category</h2>
+                    <div class="sidebar-actions">
+                        <button id="loadCategoriesBtn" class="btn btn-primary btn-small">RELOAD</button>
+                        <button id="clearCategoryBtn" class="btn btn-secondary btn-small">CLEAR</button>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="clientSecret">Client Secret</label>
-                    <input type="password" id="clientSecret" placeholder="Client Secret" autocomplete="off">
+                <div class="categories-list" id="categoriesList"></div>
+            </aside>
+
+            <!-- Right Content Area - Products -->
+            <main class="content-area">
+                <!-- Search Section -->
+                <div class="search-section">
+                    <h2>Search Products</h2>
+                    <p class="section-hint">Select a category from the left or use the dropdown below to view products.</p>
+                    <div id="authRequiredMessage" class="auth-required-message" style="display: none;">
+                        Authentication required. Please connect first.
+                    </div>
+                    <div class="search-form">
+                        <div class="form-group">
+                            <label for="selectedCategory">Category</label>
+                            <select id="selectedCategory">
+                                <option value="">All Categories</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="limit">Product Count</label>
+                            <select id="limit">
+                                <option value="10">10</option>
+                                <option value="20" selected>20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+                        <button id="searchBtn" class="btn btn-primary">SEARCH</button>
+                        <button id="clearBtn" class="btn btn-secondary">CLEAR</button>
+                    </div>
                 </div>
-                <button id="saveCredentialsBtn" class="btn btn-primary">CONNECT</button>
-                <button id="clearCredentialsBtn" class="btn btn-secondary" style="display: none;">Clear</button>
-            </div>
-            <div id="credentialsMessage" class="message" style="display: none;"></div>
-        </div>
 
-        <div id="mainContent" style="display: none;">
-        <div class="status-bar">
-            <div class="status-item">
-                <span class="status-label">Status</span>
-                <span id="apiStatus" class="status-value">Disconnected</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">Auth</span>
-                <span id="authStatus" class="status-value">Pending</span>
-            </div>
-        </div>
+                <!-- Results Section -->
+                <div class="results-section">
+                    <div class="results-header">
+                        <h2>Product Offers <span id="resultsCount" class="count-badge">0</span></h2>
+                        <div class="results-actions">
+                            <button id="importSelectedBtn" class="btn btn-success" disabled>IMPORT</button>
+                            <button id="importAllBtn" class="btn btn-success" disabled>IMPORT ALL</button>
+                        </div>
+                    </div>
 
-        <div class="categories-section">
-            <h2>Categories</h2>
-            <p class="section-hint">Browse all categories. Click a category to see products. Categories load automatically after authentication.</p>
-            <div class="category-search-form">
-                <button id="loadCategoriesBtn" class="btn btn-primary">RELOAD CATEGORIES</button>
-                <button id="clearCategoryBtn" class="btn btn-secondary">CLEAR SELECTION</button>
-            </div>
-            <div id="categoriesList" class="categories-list"></div>
-        </div>
+                    <div id="loadingIndicator" class="loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <p>Loading...</p>
+                    </div>
 
-        <div class="search-section">
-            <h2>Search Products</h2>
-            <p class="section-hint">Select a category above or use the dropdown below to view products. Specify product count to limit results.</p>
-            <div id="authRequiredMessage" class="auth-required-message" style="display: none;">
-                Authentication required. Please test connection first.
-            </div>
-            <div class="search-form">
-                <div class="form-group">
-                    <label for="selectedCategory">Category</label>
-                    <select id="selectedCategory">
-                        <option value="">All Categories</option>
-                    </select>
+                    <div id="errorMessage" class="error-message" style="display: none;"></div>
+
+                    <div id="offersList" class="offers-grid"></div>
+
+                    <div class="pagination" id="pagination" style="display: none;">
+                        <button id="prevBtn" class="btn btn-secondary" disabled>Prev</button>
+                        <span id="pageInfo">Page 1</span>
+                        <button id="nextBtn" class="btn btn-secondary" disabled>Next</button>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="limit">Product Count</label>
-                    <select id="limit">
-                        <option value="10">10</option>
-                        <option value="20" selected>20</option>
-                        <option value="50">50</option>
-                        <option value="100">100</option>
-                    </select>
+
+                <!-- Imported Products Section -->
+                <div class="imported-section">
+                    <h2>Imported Products <span id="importedCount" class="count-badge">0</span></h2>
+                    <div id="importedList" class="imported-list"></div>
                 </div>
-                <button id="searchBtn" class="btn btn-primary">SEARCH</button>
-                <button id="clearBtn" class="btn btn-secondary">CLEAR</button>
-            </div>
-        </div>
-
-        <div class="results-section">
-            <div class="results-header">
-                <h2>Product Offers <span id="resultsCount" class="count-badge">0</span></h2>
-                <div class="results-actions">
-                    <button id="importSelectedBtn" class="btn btn-success" disabled>IMPORT</button>
-                    <button id="importAllBtn" class="btn btn-success" disabled>IMPORT ALL</button>
-                </div>
-            </div>
-
-            <div id="loadingIndicator" class="loading" style="display: none;">
-                <div class="spinner"></div>
-                <p>Loading...</p>
-            </div>
-
-            <div id="errorMessage" class="error-message" style="display: none;"></div>
-
-            <div id="offersList" class="offers-list"></div>
-
-            <div class="pagination" id="pagination" style="display: none;">
-                <button id="prevBtn" class="btn btn-secondary" disabled>Prev</button>
-                <span id="pageInfo">Page 1</span>
-                <button id="nextBtn" class="btn btn-secondary" disabled>Next</button>
-            </div>
-        </div>
-
-        <div class="imported-section">
-            <h2>Imported Products <span id="importedCount" class="count-badge">0</span></h2>
-            <div id="importedList" class="imported-list"></div>
-        </div>
+            </main>
         </div>
     </div>
 
@@ -117,4 +140,3 @@
     <script src="app.js"></script>
 </body>
 </html>
-

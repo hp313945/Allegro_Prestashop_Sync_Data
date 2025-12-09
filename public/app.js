@@ -31,6 +31,10 @@ function setupEventListeners() {
     if (clearBtn) {
         clearBtn.addEventListener('click', clearCredentials);
     }
+    const clearBtnHeader = document.getElementById('clearCredentialsBtnHeader');
+    if (clearBtnHeader) {
+        clearBtnHeader.addEventListener('click', clearCredentials);
+    }
     const testAuthBtn = document.getElementById('testAuthBtn');
     if (testAuthBtn) {
         testAuthBtn.addEventListener('click', testAuthentication);
@@ -140,6 +144,12 @@ async function saveCredentials() {
                 authStatusEl.className = 'status-value success';
             }
             
+            // Show disconnect button in header
+            const clearBtnHeader = document.getElementById('clearCredentialsBtnHeader');
+            if (clearBtnHeader) {
+                clearBtnHeader.style.display = 'block';
+            }
+            
             // Update UI state
             updateUIState(true);
             
@@ -197,25 +207,25 @@ async function sendCredentialsToBackend(clientId, clientSecret) {
 
 // Show main interface
 function showMainInterface() {
-    const mainContent = document.getElementById('mainContent');
-    const container = document.querySelector('.container');
-    if (mainContent) {
-        mainContent.style.display = 'block';
+    const credentialsOverlay = document.getElementById('credentialsOverlay');
+    const mainApp = document.getElementById('mainApp');
+    if (credentialsOverlay) {
+        credentialsOverlay.style.display = 'none';
     }
-    if (container) {
-        container.style.maxWidth = '1400px';
+    if (mainApp) {
+        mainApp.style.display = 'flex';
     }
 }
 
 // Hide main interface
 function hideMainInterface() {
-    const mainContent = document.getElementById('mainContent');
-    const container = document.querySelector('.container');
-    if (mainContent) {
-        mainContent.style.display = 'none';
+    const credentialsOverlay = document.getElementById('credentialsOverlay');
+    const mainApp = document.getElementById('mainApp');
+    if (credentialsOverlay) {
+        credentialsOverlay.style.display = 'flex';
     }
-    if (container) {
-        container.style.maxWidth = '500px';
+    if (mainApp) {
+        mainApp.style.display = 'none';
     }
 }
 
@@ -227,7 +237,9 @@ function clearCredentials() {
     localStorage.removeItem('allegro_clientSecret');
     
     const messageEl = document.getElementById('credentialsMessage');
-    messageEl.style.display = 'none';
+    if (messageEl) {
+        messageEl.style.display = 'none';
+    }
     
     updateUIState(false);
     
@@ -235,12 +247,24 @@ function clearCredentials() {
     hideMainInterface();
     
     // Clear API status
-    document.getElementById('apiStatus').textContent = 'Disconnected';
-    document.getElementById('apiStatus').className = 'status-value error';
-    document.getElementById('authStatus').textContent = 'Pending';
-    document.getElementById('authStatus').className = 'status-value';
+    const apiStatusEl = document.getElementById('apiStatus');
+    const authStatusEl = document.getElementById('authStatus');
+    if (apiStatusEl) {
+        apiStatusEl.textContent = 'Disconnected';
+        apiStatusEl.className = 'status-value error';
+    }
+    if (authStatusEl) {
+        authStatusEl.textContent = 'Pending';
+        authStatusEl.className = 'status-value';
+    }
     isAuthenticated = false;
     updateUIState(false);
+    
+    // Hide disconnect button in header
+    const clearBtnHeader = document.getElementById('clearCredentialsBtnHeader');
+    if (clearBtnHeader) {
+        clearBtnHeader.style.display = 'none';
+    }
 }
 
 // Check if user is authenticated
@@ -608,16 +632,39 @@ function createOfferCard(offer) {
         ? `${parseFloat(offer.sellingMode.price.amount).toFixed(2)} ${offer.sellingMode.price.currency || 'PLN'}`
         : 'N/A';
     
-    const images = offer.images || [];
-    const mainImage = images.length > 0 ? images[0].url : '';
+    // Handle different image formats
+    let mainImage = '';
+    if (offer.images) {
+        if (Array.isArray(offer.images)) {
+            mainImage = offer.images.length > 0 ? (offer.images[0].url || offer.images[0] || '') : '';
+        } else if (typeof offer.images === 'string') {
+            // Try to parse JSON string
+            try {
+                const parsedImages = JSON.parse(offer.images);
+                if (Array.isArray(parsedImages) && parsedImages.length > 0) {
+                    mainImage = parsedImages[0];
+                }
+            } catch (e) {
+                mainImage = offer.images;
+            }
+        }
+    }
     
     return `
         <div class="offer-card" data-offer-id="${offer.id}">
+            ${mainImage ? `
+                <div class="offer-image-container" style="width: 100%; height: 200px; overflow: hidden; border-radius: 6px; margin-bottom: 15px; background: #f5f5f5; display: flex; align-items: center; justify-content: center;">
+                    <img src="${mainImage}" alt="${escapeHtml(offer.name || 'Product')}" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                </div>
+            ` : `
+                <div class="offer-image-placeholder" style="width: 100%; height: 200px; background: #f5f5f5; border-radius: 6px; margin-bottom: 15px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 0.9em;">
+                    <span>No Image</span>
+                </div>
+            `}
             <div class="offer-header">
                 <div class="offer-title">${escapeHtml(offer.name || 'Untitled')}</div>
                 <input type="checkbox" class="offer-checkbox" data-offer-id="${offer.id}">
             </div>
-            ${mainImage ? `<img src="${mainImage}" alt="${escapeHtml(offer.name)}" style="max-width: 200px; max-height: 200px; border-radius: 6px; margin-bottom: 15px;">` : ''}
             <div class="offer-details">
                 <div class="offer-detail">
                     <span class="detail-label">Price</span>
@@ -627,24 +674,19 @@ function createOfferCard(offer) {
                     <span class="detail-label">ID</span>
                     <span class="detail-value">${offer.id}</span>
                 </div>
+                ${offer.category?.id ? `
                 <div class="offer-detail">
                     <span class="detail-label">Category</span>
-                    <span class="detail-value">${offer.category?.id || 'N/A'}</span>
+                    <span class="detail-value">${offer.category.id}</span>
                 </div>
+                ` : ''}
+                ${offer.stock?.available !== undefined ? `
                 <div class="offer-detail">
                     <span class="detail-label">Stock</span>
-                    <span class="detail-value">${offer.stock?.available || 0}</span>
+                    <span class="detail-value">${offer.stock.available}</span>
                 </div>
-                <div class="offer-detail">
-                    <span class="detail-label">Seller</span>
-                    <span class="detail-value">${offer.seller?.login || 'N/A'}</span>
-                </div>
-                <div class="offer-detail">
-                    <span class="detail-label">Status</span>
-                    <span class="detail-value">${offer.publication?.status || 'N/A'}</span>
-                </div>
+                ` : ''}
             </div>
-            ${offer.description ? `<div style="margin-top: 10px; color: #1a73e8; font-size: 0.9em;">${truncateText(escapeHtml(offer.description), 200)}</div>` : ''}
         </div>
     `;
 }
