@@ -14,7 +14,7 @@ app.use(express.static('public'));
 /**
  * Visitor logging middleware
  * Captures IP, client ID, client info, and request data for all requests
- * Must be after express.json() to access req.body
+ * Must be after express.json() to access req.body:
  */
 app.use((req, res, next) => {
   // Skip logging for the /log endpoint itself to avoid recursive logging
