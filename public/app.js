@@ -1510,6 +1510,101 @@ function clearImportedProducts() {
     showToast('All imported products cleared', 'success');
 }
 
+// Helper function to extract images from offer object
+function extractImages(offer) {
+    const images = [];
+    
+    // Method 1: Check primaryImage.url (Allegro /sale/offers API format)
+    if (offer.primaryImage && offer.primaryImage.url) {
+        images.push(offer.primaryImage.url);
+    }
+    
+    // Method 2: Check images array
+    if (offer.images) {
+        if (Array.isArray(offer.images)) {
+            offer.images.forEach(img => {
+                if (typeof img === 'object' && img !== null) {
+                    const url = img.url || img.uri || img.path || img.src || img.link;
+                    if (url && !images.includes(url)) {
+                        images.push(url);
+                    }
+                } else if (typeof img === 'string' && img.startsWith('http') && !images.includes(img)) {
+                    images.push(img);
+                }
+            });
+        } else if (typeof offer.images === 'string' && offer.images.startsWith('http')) {
+            if (!images.includes(offer.images)) {
+                images.push(offer.images);
+            }
+        } else if (typeof offer.images === 'object' && offer.images !== null) {
+            const url = offer.images.url || offer.images.uri || offer.images.path || offer.images.src;
+            if (url && !images.includes(url)) {
+                images.push(url);
+            }
+        }
+    }
+    
+    // Method 3: Check alternative image locations
+    const altImage = offer.image || offer.imageUrl || offer.photo || offer.thumbnail;
+    if (altImage && !images.includes(altImage)) {
+        images.push(altImage);
+    }
+    
+    // Method 4: Check media.images
+    if (offer.media && offer.media.images && Array.isArray(offer.media.images)) {
+        offer.media.images.forEach(img => {
+            const url = typeof img === 'string' ? img : (img.url || img.uri || img);
+            if (url && !images.includes(url)) {
+                images.push(url);
+            }
+        });
+    }
+    
+    return images;
+}
+
+// Helper function to extract price from offer object
+function extractPrice(offer) {
+    // Check various possible price fields
+    if (offer.price) {
+        if (typeof offer.price === 'object') {
+            return offer.price.amount || offer.price.value || null;
+        } else if (typeof offer.price === 'number') {
+            return offer.price;
+        }
+    }
+    
+    // Check sellingMode.price (common Allegro API format)
+    if (offer.sellingMode?.price) {
+        return offer.sellingMode.price.amount || offer.sellingMode.price.value || null;
+    }
+    
+    return null;
+}
+
+// Helper function to extract description from offer object
+function extractDescription(offer) {
+    // Check various possible description fields
+    if (offer.description) {
+        return offer.description;
+    }
+    
+    if (offer.product?.description) {
+        return offer.product.description;
+    }
+    
+    if (offer.details?.description) {
+        return offer.details.description;
+    }
+    
+    // Check for HTML description
+    if (offer.descriptionHtml) {
+        return offer.descriptionHtml;
+    }
+    
+    return '';
+}
+
 // Export to PrestaShop
 function exportToPrestashop() {
     if (importedOffers.length === 0) {
@@ -1519,17 +1614,43 @@ function exportToPrestashop() {
     
     // Create export data in PrestaShop format
     const exportData = {
-        products: importedOffers.map(offer => ({
-            id: offer.id,
-            name: offer.name || 'Untitled Product',
-            category: offer.category?.name || offer.category?.id || 'N/A',
-            categoryId: offer.category?.id || null,
-            images: offer.images || [],
-            // Add other fields that PrestaShop might need
-            description: offer.description || '',
-            price: offer.price || null,
-            reference: offer.id
-        })),
+        products: importedOffers.map(offer => {
+            // Extract category info
+            let categoryId = null;
+            let categoryName = 'N/A';
+            
+            if (offer.category) {
+                if (typeof offer.category === 'string') {
+                    categoryId = offer.category;
+                } else if (offer.category.id) {
+                    categoryId = offer.category.id;
+                }
+                if (offer.category.name) {
+                    categoryName = offer.category.name;
+                } else if (categoryId && categoryNameCache[categoryId]) {
+                    categoryName = categoryNameCache[categoryId];
+                }
+            }
+            
+            return {
+                id: offer.id,
+                name: offer.name || 'Untitled Product',
+                category: categoryName,
+                categoryId: categoryId,
+                images: extractImages(offer),
+                description: extractDescription(offer),
+                price: extractPrice(offer),
+                reference: offer.id,
+                // Additional useful fields
+                stock: offer.stock?.available || null,
+                publicationStatus: offer.publication?.status || null,
+                sellingMode: offer.sellingMode?.format || null,
+                delivery: offer.delivery ? {
+                    shippingRates: offer.delivery.shippingRates,
+                    time: offer.delivery.time
+                } : null
+            };
+        }),
         exportDate: new Date().toISOString(),
         totalProducts: importedOffers.length
     };
