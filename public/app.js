@@ -6,6 +6,7 @@ let currentLimit = 20;
 let totalCount = 0; // Current page product count
 let totalProductsSeen = 0; // Total products seen across all pages in current category
 let isAuthenticated = false;
+let isOAuthConnected = false; // Track OAuth connection status
 let allCategories = [];
 let selectedCategoryId = null;
 let currentNextPage = null; // For cursor-based pagination
@@ -38,11 +39,22 @@ function setupEventListeners() {
     if (clearBtnHeader) {
         clearBtnHeader.addEventListener('click', clearCredentials);
     }
+    const authorizeAccountBtn = document.getElementById('authorizeAccountBtn');
+    if (authorizeAccountBtn) {
+        authorizeAccountBtn.addEventListener('click', authorizeAccount);
+    }
     const testAuthBtn = document.getElementById('testAuthBtn');
     if (testAuthBtn) {
         testAuthBtn.addEventListener('click', testAuthentication);
     }
     document.getElementById('clearBtn').addEventListener('click', clearSearch);
+    
+    // Listen for OAuth success message from popup
+    window.addEventListener('message', function(event) {
+        if (event.data && event.data.type === 'oauth_success') {
+            checkOAuthStatus();
+        }
+    });
     
     // Add event listener for load offers button
     const loadOffersBtn = document.getElementById('loadOffersBtn');
@@ -179,6 +191,9 @@ async function saveCredentials() {
             // Check API status
             await checkApiStatus();
             
+            // Check OAuth status
+            await checkOAuthStatus();
+            
             // Auto-load categories when authenticated
             await loadCategories();
         } else {
@@ -253,7 +268,7 @@ function hideMainInterface() {
 }
 
 // Clear credentials
-function clearCredentials() {
+async function clearCredentials() {
     document.getElementById('clientId').value = '';
     document.getElementById('clientSecret').value = '';
     localStorage.removeItem('allegro_clientId');
@@ -264,6 +279,15 @@ function clearCredentials() {
         messageEl.style.display = 'none';
     }
     
+    // Disconnect OAuth
+    try {
+        await fetch(`${API_BASE}/api/oauth/disconnect`, {
+            method: 'POST'
+        });
+    } catch (error) {
+        console.error('Error disconnecting OAuth:', error);
+    }
+    
     updateUIState(false);
     
     // Hide main interface
@@ -272,6 +296,7 @@ function clearCredentials() {
     // Clear API status
     const apiStatusEl = document.getElementById('apiStatus');
     const authStatusEl = document.getElementById('authStatus');
+    const oauthStatusEl = document.getElementById('oauthStatus');
     if (apiStatusEl) {
         apiStatusEl.textContent = 'Disconnected';
         apiStatusEl.className = 'status-value error';
@@ -280,14 +305,23 @@ function clearCredentials() {
         authStatusEl.textContent = 'Pending';
         authStatusEl.className = 'status-value';
     }
+    if (oauthStatusEl) {
+        oauthStatusEl.textContent = 'Not Connected';
+        oauthStatusEl.className = 'status-value error';
+    }
     isAuthenticated = false;
+    isOAuthConnected = false;
     priceInfoMessageShown = false; // Reset message flag when disconnecting
     updateUIState(false);
     
-    // Hide disconnect button in header
+    // Hide disconnect button and authorize button in header
     const clearBtnHeader = document.getElementById('clearCredentialsBtnHeader');
+    const authorizeBtn = document.getElementById('authorizeAccountBtn');
     if (clearBtnHeader) {
         clearBtnHeader.style.display = 'none';
+    }
+    if (authorizeBtn) {
+        authorizeBtn.style.display = 'none';
     }
     
     // Hide price info message
@@ -309,10 +343,15 @@ function validateAuth() {
     if (!checkAuthentication()) {
         const errorEl = document.getElementById('errorMessage');
         if (errorEl) {
-            errorEl.textContent = 'Authentication required. Please test connection first.';
-            errorEl.style.display = 'block';
+            const errorContentEl = errorEl.querySelector('.error-message-content');
+            if (errorContentEl) {
+                errorContentEl.textContent = 'Authentication required. Please test connection first.';
+            } else {
+                errorEl.innerHTML = `<div class="error-message-content">Authentication required. Please test connection first.</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
+            }
+            errorEl.style.display = 'flex';
             setTimeout(() => {
-                errorEl.style.display = 'none';
+                closeErrorMessage();
             }, 5000);
         }
         return false;
@@ -398,6 +437,88 @@ async function checkApiStatus() {
             statusEl.className = 'status-value error';
         }
     }
+}
+
+// Check OAuth connection status
+async function checkOAuthStatus() {
+    try {
+        const response = await fetch(`${API_BASE}/api/oauth/status`);
+        const data = await response.json();
+        
+        const oauthStatusEl = document.getElementById('oauthStatus');
+        const authorizeBtn = document.getElementById('authorizeAccountBtn');
+        
+        isOAuthConnected = data.connected || false;
+        
+        if (oauthStatusEl) {
+            if (isOAuthConnected) {
+                oauthStatusEl.textContent = 'Connected';
+                oauthStatusEl.className = 'status-value success';
+            } else {
+                oauthStatusEl.textContent = 'Not Connected';
+                oauthStatusEl.className = 'status-value error';
+            }
+        }
+        
+        // Show/hide authorize button based on authentication and OAuth status
+        if (authorizeBtn && isAuthenticated) {
+            if (isOAuthConnected) {
+                authorizeBtn.style.display = 'none';
+            } else {
+                authorizeBtn.style.display = 'block';
+            }
+        }
+    } catch (error) {
+        console.error('Error checking OAuth status:', error);
+        const oauthStatusEl = document.getElementById('oauthStatus');
+        if (oauthStatusEl) {
+            oauthStatusEl.textContent = 'Error';
+            oauthStatusEl.className = 'status-value error';
+        }
+    }
+}
+
+// Authorize account (OAuth flow)
+function authorizeAccount() {
+    if (!isAuthenticated) {
+        showToast('Please connect with Client ID and Secret first', 'error');
+        return;
+    }
+    
+    // Open OAuth authorization in a popup window
+    const width = 600;
+    const height = 700;
+    const left = (window.screen.width - width) / 2;
+    const top = (window.screen.height - height) / 2;
+    
+    const popup = window.open(
+        `${API_BASE}/api/oauth/authorize`,
+        'Allegro Authorization',
+        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
+    );
+    
+    // Check if popup was blocked
+    if (!popup) {
+        showToast('Popup blocked. Please allow popups for this site and try again.', 'error');
+        return;
+    }
+    
+    // Poll for popup closure or check status periodically
+    const checkInterval = setInterval(async () => {
+        if (popup.closed) {
+            clearInterval(checkInterval);
+            // Check OAuth status after popup closes
+            await checkOAuthStatus();
+            // If connected, refresh offers
+            if (isOAuthConnected) {
+                showToast('Account authorized successfully!', 'success');
+                // Refresh offers if already loaded
+                if (currentOffers.length > 0 || currentPageNumber > 1) {
+                    await fetchOffers(currentOffset, currentLimit);
+                }
+            }
+        }
+    }, 500);
 }
 
 // Test authentication (kept for backward compatibility, but not used in main flow)
@@ -509,8 +630,13 @@ async function fetchOffers(offset = 0, limit = 20) {
     if (!checkAuthentication()) {
         const errorEl = document.getElementById('errorMessage');
         if (errorEl) {
-            errorEl.textContent = 'Authentication required. Please test connection first.';
-            errorEl.style.display = 'block';
+            const errorContentEl = errorEl.querySelector('.error-message-content');
+            if (errorContentEl) {
+                errorContentEl.textContent = 'Authentication required. Please test connection first.';
+            } else {
+                errorEl.innerHTML = `<div class="error-message-content">Authentication required. Please test connection first.</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
+            }
+            errorEl.style.display = 'flex';
         }
         return;
     }
@@ -562,15 +688,45 @@ async function fetchOffers(offset = 0, limit = 20) {
         } else {
             // Check if this is the OAuth requirement error
             if (result.requiresUserOAuth) {
-                // Format the error message exactly as specified
-                let detailedError = result.error || 'This feature requires user-level OAuth authentication, which is not available with client credentials only.';
+                // Show user-friendly message with action button
+                const errorContentEl = errorEl.querySelector('.error-message-content');
+                let errorMsg = result.error || 'User OAuth authentication required.';
                 if (result.instructions && Array.isArray(result.instructions) && result.instructions.length > 0) {
-                    detailedError += '\n\n' + result.instructions[0];
+                    errorMsg += ' ' + result.instructions[0];
                 }
-                if (result.documentation) {
-                    detailedError += `\n\nPlease check this: ${result.documentation}`;
+                
+                if (errorContentEl) {
+                    errorContentEl.innerHTML = `
+                        <strong>Authorization Required</strong><br><br>
+                        ${escapeHtml(errorMsg)}<br><br>
+                        <button id="authorizeFromErrorBtn" class="btn btn-primary" style="margin-top: 10px;">Authorize Account</button>
+                    `;
+                    
+                    // Add event listener to authorize button
+                    setTimeout(() => {
+                        const authorizeFromErrorBtn = document.getElementById('authorizeFromErrorBtn');
+                        if (authorizeFromErrorBtn) {
+                            authorizeFromErrorBtn.addEventListener('click', authorizeAccount);
+                        }
+                    }, 100);
+                } else {
+                    errorEl.innerHTML = `
+                        <div class="error-message-content">
+                            <strong>Authorization Required</strong><br><br>
+                            ${escapeHtml(errorMsg)}<br><br>
+                            <button id="authorizeFromErrorBtn" class="btn btn-primary" style="margin-top: 10px;">Authorize Account</button>
+                        </div>
+                        <button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>
+                    `;
+                    setTimeout(() => {
+                        const authorizeFromErrorBtn = document.getElementById('authorizeFromErrorBtn');
+                        if (authorizeFromErrorBtn) {
+                            authorizeFromErrorBtn.addEventListener('click', authorizeAccount);
+                        }
+                    }, 100);
                 }
-                throw new Error(detailedError);
+                errorEl.style.display = 'flex';
+                return; // Don't throw error, just show the message
             }
             
             // Show the actual error message from the API
@@ -591,8 +747,15 @@ async function fetchOffers(offset = 0, limit = 20) {
         // Make URLs clickable
         formattedMsg = formattedMsg.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
         
-        errorEl.innerHTML = `<strong>Failed to fetch offers:</strong><br><br>${formattedMsg}`;
-        errorEl.style.display = 'block';
+        // Update error message content in the content div
+        const errorContentEl = errorEl.querySelector('.error-message-content');
+        if (errorContentEl) {
+            errorContentEl.innerHTML = `<strong>Failed to fetch offers:</strong><br><br>${formattedMsg}`;
+        } else {
+            // Fallback if structure is not updated
+            errorEl.innerHTML = `<div class="error-message-content"><strong>Failed to fetch offers:</strong><br><br>${formattedMsg}</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
+        }
+        errorEl.style.display = 'flex';
         
         // Show toast notification as well
         showToast('Unable to load your offers. Please check the error message below.', 'error', 8000);
@@ -1319,8 +1482,13 @@ async function loadCategories() {
         if (errorMessage.includes('status code')) {
             errorMessage = 'Invalid credentials. Please check your Client ID and Client Secret.';
         }
-        errorEl.textContent = `Failed to fetch categories: ${errorMessage}`;
-        errorEl.style.display = 'block';
+        const errorContentEl = errorEl.querySelector('.error-message-content');
+        if (errorContentEl) {
+            errorContentEl.textContent = `Failed to fetch categories: ${errorMessage}`;
+        } else {
+            errorEl.innerHTML = `<div class="error-message-content">Failed to fetch categories: ${errorMessage}</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
+        }
+        errorEl.style.display = 'flex';
         categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #c5221f;">Failed to load categories. Please try again.</p>';
     } finally {
         loadCategoriesBtn.disabled = false;
@@ -1520,6 +1688,19 @@ function closePriceInfoMessage() {
             messageEl.classList.remove('hiding');
             // Remove margin to prevent empty space
             messageEl.style.marginBottom = '0';
+        }, 300);
+    }
+}
+
+// Close error message
+function closeErrorMessage() {
+    const errorEl = document.getElementById('errorMessage');
+    if (errorEl) {
+        errorEl.classList.add('hiding');
+        setTimeout(() => {
+            errorEl.style.display = 'none';
+            errorEl.classList.remove('hiding');
+            errorEl.style.marginBottom = '0';
         }, 300);
     }
 }

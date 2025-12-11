@@ -48,6 +48,11 @@
                         <span class="status-label">Auth</span>
                         <span id="authStatus" class="status-value">Pending</span>
                     </div>
+                    <div class="status-item">
+                        <span class="status-label">Account</span>
+                        <span id="oauthStatus" class="status-value">Not Connected</span>
+                    </div>
+                    <button id="authorizeAccountBtn" class="btn btn-primary btn-small" style="display: none;">Authorize Account</button>
                     <button id="clearCredentialsBtnHeader" class="btn btn-secondary btn-small" style="display: none;">Disconnect</button>
                 </div>
             </div>
@@ -112,7 +117,10 @@
                         <p>Loading...</p>
                     </div>
 
-                    <div id="errorMessage" class="error-message" style="display: none;"></div>
+                    <div id="errorMessage" class="error-message" style="display: none;">
+                        <div class="error-message-content"></div>
+                        <button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>
+                    </div>
 
                     <div class="pagination" id="pagination" style="display: none;">
                         <div>

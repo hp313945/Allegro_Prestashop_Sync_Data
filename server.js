@@ -89,6 +89,14 @@ let userCredentials = {
 let accessToken = null;
 let tokenExpiry = null;
 
+// Store user OAuth tokens (for user-level authentication)
+let userOAuthTokens = {
+  accessToken: null,
+  refreshToken: null,
+  expiresAt: null,
+  userId: null
+};
+
 // Store visitor logs (in-memory storage)
 // In production, use proper database storage
 let visitorLogs = [];
@@ -194,11 +202,76 @@ async function getAccessToken() {
 }
 
 /**
- * Make authenticated request to Allegro API
+ * Get user OAuth access token (refresh if needed)
  */
-async function allegroApiRequest(endpoint, params = {}) {
+async function getUserAccessToken() {
   try {
-    const token = await getAccessToken();
+    // Check if token is still valid
+    if (userOAuthTokens.accessToken && userOAuthTokens.expiresAt && Date.now() < userOAuthTokens.expiresAt) {
+      return userOAuthTokens.accessToken;
+    }
+
+    // If we have a refresh token, try to refresh
+    if (userOAuthTokens.refreshToken && userCredentials.clientId && userCredentials.clientSecret) {
+      try {
+        const credentials = Buffer.from(`${userCredentials.clientId}:${userCredentials.clientSecret}`).toString('base64');
+        
+        const response = await axios.post(
+          `${ALLEGRO_AUTH_URL}/token`,
+          `grant_type=refresh_token&refresh_token=${encodeURIComponent(userOAuthTokens.refreshToken)}`,
+          {
+            headers: {
+              'Authorization': `Basic ${credentials}`,
+              'Content-Type': 'application/x-www-form-urlencoded'
+            }
+          }
+        );
+
+        userOAuthTokens.accessToken = response.data.access_token;
+        userOAuthTokens.refreshToken = response.data.refresh_token || userOAuthTokens.refreshToken;
+        const expiresIn = response.data.expires_in || 3600;
+        userOAuthTokens.expiresAt = Date.now() + (expiresIn - 60) * 1000;
+
+        return userOAuthTokens.accessToken;
+      } catch (refreshError) {
+        console.error('Error refreshing token:', refreshError.response?.data || refreshError.message);
+        // If refresh fails, clear tokens and require re-authentication
+        userOAuthTokens = {
+          accessToken: null,
+          refreshToken: null,
+          expiresAt: null,
+          userId: null
+        };
+        throw new Error('Token refresh failed. Please reconnect your account.');
+      }
+    }
+
+    throw new Error('No valid user token. Please authorize your account.');
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Make authenticated request to Allegro API
+ * Uses user OAuth token if available, otherwise falls back to client credentials
+ */
+async function allegroApiRequest(endpoint, params = {}, useUserToken = false) {
+  try {
+    let token;
+    
+    if (useUserToken) {
+      // Try to use user OAuth token first
+      try {
+        token = await getUserAccessToken();
+      } catch (userTokenError) {
+        // If user token is not available, throw error to indicate OAuth is required
+        throw new Error('User OAuth authentication required');
+      }
+    } else {
+      // Use client credentials token
+      token = await getAccessToken();
+    }
     
     // Log the actual request that will be made
     const url = new URL(`${ALLEGRO_API_URL}${endpoint}`);
@@ -279,8 +352,214 @@ app.get('/api/health', (req, res) => {
 });
 
 /**
+ * OAuth Authorization endpoint - redirects user to Allegro
+ */
+app.get('/api/oauth/authorize', (req, res) => {
+  if (!userCredentials.clientId) {
+    return res.status(400).json({
+      success: false,
+      error: 'Client ID and Client Secret must be configured first'
+    });
+  }
+
+  // Generate state for CSRF protection
+  const state = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  
+  // Build redirect URI - use environment variable or construct from request
+  // Default to the known server URL if available
+  let redirectUri;
+  if (process.env.OAUTH_REDIRECT_URI) {
+    redirectUri = process.env.OAUTH_REDIRECT_URI;
+  } else {
+    // Construct from request, but prefer http for local development
+    const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
+    const host = req.get('host') || `localhost:${PORT}`;
+    redirectUri = `${protocol}://${host}/api/oauth/callback`;
+  }
+  
+  const redirectUriEncoded = encodeURIComponent(redirectUri);
+  const clientId = encodeURIComponent(userCredentials.clientId);
+  const scope = encodeURIComponent('allegro:api');
+  const stateParam = encodeURIComponent(state);
+  
+  const authUrl = `${ALLEGRO_AUTH_URL}/authorize?response_type=code&client_id=${clientId}&redirect_uri=${redirectUriEncoded}&scope=${scope}&state=${stateParam}`;
+  
+  console.log('OAuth authorization URL:', authUrl);
+  console.log('Redirect URI:', redirectUri);
+  
+  res.redirect(authUrl);
+});
+
+/**
+ * OAuth Callback endpoint - handles authorization code and exchanges for tokens
+ */
+app.get('/api/oauth/callback', async (req, res) => {
+  try {
+    const { code, state, error } = req.query;
+    
+    if (error) {
+      return res.send(`
+        <html>
+          <head><title>Authorization Failed</title></head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1>Authorization Failed</h1>
+            <p>${error}</p>
+            <p><a href="/">Return to application</a></p>
+          </body>
+        </html>
+      `);
+    }
+    
+    if (!code) {
+      return res.send(`
+        <html>
+          <head><title>Authorization Failed</title></head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1>Authorization Failed</h1>
+            <p>No authorization code received.</p>
+            <p><a href="/">Return to application</a></p>
+          </body>
+        </html>
+      `);
+    }
+    
+    if (!userCredentials.clientId || !userCredentials.clientSecret) {
+      return res.send(`
+        <html>
+          <head><title>Configuration Error</title></head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1>Configuration Error</h1>
+            <p>Client credentials not configured. Please configure them first.</p>
+            <p><a href="/">Return to application</a></p>
+          </body>
+        </html>
+      `);
+    }
+    
+    // Exchange authorization code for tokens
+    // Use the same redirect URI construction as in authorize endpoint
+    let redirectUri;
+    if (process.env.OAUTH_REDIRECT_URI) {
+      redirectUri = process.env.OAUTH_REDIRECT_URI;
+    } else {
+      const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
+      const host = req.get('host') || `localhost:${PORT}`;
+      redirectUri = `${protocol}://${host}/api/oauth/callback`;
+    }
+    
+    const credentials = Buffer.from(`${userCredentials.clientId}:${userCredentials.clientSecret}`).toString('base64');
+    
+    try {
+      const tokenResponse = await axios.post(
+        `${ALLEGRO_AUTH_URL}/token`,
+        `grant_type=authorization_code&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(redirectUri)}`,
+        {
+          headers: {
+            'Authorization': `Basic ${credentials}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        }
+      );
+      
+      // Store user tokens
+      userOAuthTokens.accessToken = tokenResponse.data.access_token;
+      userOAuthTokens.refreshToken = tokenResponse.data.refresh_token;
+      const expiresIn = tokenResponse.data.expires_in || 3600;
+      userOAuthTokens.expiresAt = Date.now() + (expiresIn - 60) * 1000;
+      
+      // Get user info
+      try {
+        const userInfoResponse = await axios.get(`${ALLEGRO_API_URL}/me`, {
+          headers: {
+            'Authorization': `Bearer ${userOAuthTokens.accessToken}`,
+            'Accept': 'application/vnd.allegro.public.v1+json'
+          }
+        });
+        userOAuthTokens.userId = userInfoResponse.data.id;
+      } catch (userInfoError) {
+        console.log('Could not fetch user info:', userInfoError.message);
+      }
+      
+      // Redirect to success page
+      return res.send(`
+        <html>
+          <head>
+            <title>Authorization Successful</title>
+            <script>
+              setTimeout(function() {
+                window.opener.postMessage({ type: 'oauth_success' }, '*');
+                window.close();
+              }, 2000);
+            </script>
+          </head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1 style="color: green;">✓ Authorization Successful!</h1>
+            <p>Your account has been connected. This window will close automatically.</p>
+            <p>If it doesn't close, <a href="/">click here to return to the application</a></p>
+          </body>
+        </html>
+      `);
+    } catch (tokenError) {
+      console.error('Token exchange error:', tokenError.response?.data || tokenError.message);
+      return res.send(`
+        <html>
+          <head><title>Token Exchange Failed</title></head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1>Token Exchange Failed</h1>
+            <p>${tokenError.response?.data?.error_description || tokenError.message || 'Unknown error'}</p>
+            <p><a href="/">Return to application</a></p>
+          </body>
+        </html>
+      `);
+    }
+  } catch (error) {
+    console.error('OAuth callback error:', error);
+    return res.send(`
+      <html>
+        <head><title>Error</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+          <h1>Error</h1>
+          <p>${error.message || 'An unexpected error occurred'}</p>
+          <p><a href="/">Return to application</a></p>
+        </body>
+      </html>
+    `);
+  }
+});
+
+/**
+ * Check OAuth connection status
+ */
+app.get('/api/oauth/status', (req, res) => {
+  const isConnected = !!(userOAuthTokens.accessToken && userOAuthTokens.expiresAt && Date.now() < userOAuthTokens.expiresAt);
+  
+  res.json({
+    connected: isConnected,
+    userId: userOAuthTokens.userId,
+    expiresAt: userOAuthTokens.expiresAt
+  });
+});
+
+/**
+ * Disconnect OAuth (clear user tokens)
+ */
+app.post('/api/oauth/disconnect', (req, res) => {
+  userOAuthTokens = {
+    accessToken: null,
+    refreshToken: null,
+    expiresAt: null,
+    userId: null
+  };
+  
+  res.json({
+    success: true,
+    message: 'Disconnected successfully'
+  });
+});
+
+/**
  * Get user's own offers from Allegro
- * Strategy: Try /sale/offers first (requires user OAuth), fallback to /sale/products with seller filter
+ * Uses user OAuth token to fetch user's own offers
  */
 app.get('/api/offers', async (req, res) => {
   try {
@@ -304,7 +583,7 @@ app.get('/api/offers', async (req, res) => {
       offset = parsedOffset;
     }
     
-    // Try /sale/offers first (requires user-level OAuth)
+    // Try to fetch user's offers using OAuth token
     try {
       const params = {
         limit: limit,
@@ -312,7 +591,7 @@ app.get('/api/offers', async (req, res) => {
       };
       
       console.log('Attempting to fetch user offers from /sale/offers with params:', JSON.stringify(params, null, 2));
-      const data = await allegroApiRequest('/sale/offers', params);
+      const data = await allegroApiRequest('/sale/offers', params, true); // Use user token
       
       console.log('Offers response structure:', {
         hasOffers: !!data.offers,
@@ -349,20 +628,31 @@ app.get('/api/offers', async (req, res) => {
         data: normalizedData
       });
     } catch (offersError) {
+      // Check if it's a user token error
+      if (offersError.message === 'User OAuth authentication required') {
+        return res.status(403).json({
+          success: false,
+          error: 'User OAuth authentication required. Please authorize your account.',
+          requiresUserOAuth: true,
+          solution: 'To access your own offers, you need to authorize your account using OAuth.',
+          instructions: [
+            'Click the "Authorize Account" button to connect your Allegro account.'
+          ]
+        });
+      }
+      
       // If /sale/offers fails with 403, it means we need user-level OAuth
-      // Provide clear error message with instructions
       if (offersError.response?.status === 403) {
         console.log('/sale/offers requires user-level OAuth. Providing instructions to user.');
         
         return res.status(403).json({
           success: false,
-          error: 'To implement your requiremen, it requires user-level OAuth authentication, which is not available with client credentials only.',
+          error: 'User OAuth authentication required. Please authorize your account.',
           requiresUserOAuth: true,
-          solution: 'To access your own offers, you need to implement OAuth user authorization flow. Alternatively, you can use /sale/products and filter by your seller ID if you know it.',
+          solution: 'To access your own offers, you need to authorize your account using OAuth.',
           instructions: [
-            'Your application needs user-level OAuth (authorization code flow) and user must authorize your application to access their offers.'
-          ],
-          documentation: 'https://developer.allegro.pl/documentation/#section/Authentication'
+            'Click the "Authorize Account" button to connect your Allegro account.'
+          ]
         });
       }
       
