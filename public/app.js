@@ -791,15 +791,43 @@ async function displayOffers(offers) {
     const offersListEl = document.getElementById('offersList');
     const resultsCountEl = document.getElementById('resultsCount');
     
-    resultsCountEl.textContent = totalCount;
+    // Filter offers by selected category if a category is selected
+    let filteredOffers = offers;
+    if (selectedCategoryId) {
+        filteredOffers = offers.filter(offer => {
+            // Check if offer's category matches selected category
+            let offerCategoryId = null;
+            if (offer.category) {
+                if (typeof offer.category === 'string') {
+                    offerCategoryId = offer.category;
+                } else if (offer.category.id) {
+                    offerCategoryId = offer.category.id;
+                }
+            }
+            
+            // Compare category IDs (handle both string and number comparisons)
+            if (offerCategoryId) {
+                return String(offerCategoryId) === String(selectedCategoryId) || 
+                       offerCategoryId === selectedCategoryId;
+            }
+            return false;
+        });
+    }
     
-    if (offers.length === 0) {
-        offersListEl.innerHTML = '<p style="text-align: center; padding: 40px; color: #1a73e8;">No product offers found in this category. Try selecting a different category.</p>';
+    // Update results count with filtered count
+    resultsCountEl.textContent = filteredOffers.length;
+    
+    if (filteredOffers.length === 0) {
+        if (selectedCategoryId) {
+            offersListEl.innerHTML = '<p style="text-align: center; padding: 40px; color: #1a73e8;">No product offers found in this category. Try selecting a different category or click "Load My Offers" to load products.</p>';
+        } else {
+            offersListEl.innerHTML = '<p style="text-align: center; padding: 40px; color: #1a73e8;">No product offers found. Click "Load My Offers" to load products.</p>';
+        }
         return;
     }
     
     // Render cards first
-    offersListEl.innerHTML = offers.map(offer => createOfferCard(offer)).join('');
+    offersListEl.innerHTML = filteredOffers.map(offer => createOfferCard(offer)).join('');
     
     // Add checkbox listeners
     document.querySelectorAll('.offer-checkbox').forEach(checkbox => {
@@ -808,7 +836,7 @@ async function displayOffers(offers) {
     
     // Fetch full product details for products without images
     // This is done asynchronously to not block the UI
-    const productsWithoutImages = offers.filter(p => {
+    const productsWithoutImages = filteredOffers.filter(p => {
         // Check if product has no image in primaryImage or images array
         const hasPrimaryImage = p.primaryImage && p.primaryImage.url;
         const hasImages = p.images && Array.isArray(p.images) && p.images.length > 0;
@@ -1853,22 +1881,10 @@ function selectCategory(categoryId) {
         limitSelect.disabled = false;
     }
     
-        // Automatically fetch user's offers
-        // Reset pagination state
-        currentOffset = 0;
-        pageHistory = [];
-        currentPageNumber = 1; // Reset to first page
-        totalProductsSeen = 0;
-        const limit = parseInt(document.getElementById('limit').value);
-    
-    // Show loading indicator
-    const loadingEl = document.getElementById('loadingIndicator');
-    if (loadingEl) {
-        loadingEl.style.display = 'block';
+    // Filter and re-display existing offers if any are loaded
+    if (currentOffers.length > 0) {
+        displayOffers(currentOffers);
     }
-    
-    // Fetch and display user's offers
-    fetchOffers(currentOffset, limit);
 }
 
 
@@ -1917,34 +1933,26 @@ function updateCategorySelect() {
             limitSelect.disabled = !categoryId;
         }
         
-        // If no category selected, clear selection and products
+        // If no category selected, clear selection and re-display all products
         if (!categoryId) {
             document.querySelectorAll('.category-item').forEach(item => {
                 item.classList.remove('selected');
             });
-            document.getElementById('offersList').innerHTML = '';
-            document.getElementById('resultsCount').textContent = '0';
-            document.getElementById('pagination').style.display = 'none';
-            currentOffers = [];
+            // Re-display existing offers without category filter
+            if (currentOffers.length > 0) {
+                displayOffers(currentOffers);
+            } else {
+                document.getElementById('offersList').innerHTML = '';
+                document.getElementById('resultsCount').textContent = '0';
+                document.getElementById('pagination').style.display = 'none';
+            }
             return;
         }
         
-        // Automatically fetch user's offers when category selection changes
-        // Reset pagination state
-        currentOffset = 0;
-        pageHistory = [];
-        currentPageNumber = 1; // Reset to first page
-        totalProductsSeen = 0;
-        const limit = parseInt(document.getElementById('limit').value);
-        
-        // Show loading indicator
-        const loadingEl = document.getElementById('loadingIndicator');
-        if (loadingEl) {
-            loadingEl.style.display = 'block';
+        // Filter and re-display existing offers if any are loaded
+        if (currentOffers.length > 0) {
+            displayOffers(currentOffers);
         }
-        
-        // Always fetch user's offers when category selection changes (though category is not used for filtering)
-        fetchOffers(currentOffset, limit);
     });
 }
 
