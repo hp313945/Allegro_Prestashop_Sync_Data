@@ -8,12 +8,12 @@ let totalProductsSeen = 0; // Total products seen across all pages in current ca
 let isAuthenticated = false;
 let isOAuthConnected = false; // Track OAuth connection status
 let allCategories = [];
+let categoryNameCache = {}; // Cache for category names by ID
 let selectedCategoryId = null;
 let currentNextPage = null; // For cursor-based pagination
 let pageHistory = []; // Track page history for going back
 let currentPhrase = ''; // Track current search phrase
 let currentPageNumber = 1; // Track current page number
-let priceInfoMessageShown = false; // Track if price info message has been shown in this session
 
 // API Base URL
 const API_BASE = '';
@@ -77,6 +77,19 @@ function setupEventListeners() {
     document.getElementById('importAllBtn').addEventListener('click', importAll);
     document.getElementById('prevBtn').addEventListener('click', () => changePage(-1));
     document.getElementById('nextBtn').addEventListener('click', () => changePage(1));
+    
+    // Page jump functionality
+    const pageJumpBtn = document.getElementById('pageJumpBtn');
+    const pageJumpInput = document.getElementById('pageJumpInput');
+    if (pageJumpBtn && pageJumpInput) {
+        pageJumpBtn.addEventListener('click', jumpToPage);
+        pageJumpInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                jumpToPage();
+            }
+        });
+    }
+    
     document.getElementById('loadCategoriesBtn').addEventListener('click', loadCategories);
     document.getElementById('clearCategoryBtn').addEventListener('click', clearCategorySelection);
     document.getElementById('clearImportedBtn').addEventListener('click', clearImportedProducts);
@@ -172,7 +185,6 @@ async function saveCredentials() {
             
             // Set authenticated state
             isAuthenticated = true;
-            priceInfoMessageShown = false; // Reset message flag for new authentication
             const authStatusEl = document.getElementById('authStatus');
             if (authStatusEl) {
                 authStatusEl.textContent = 'Authenticated';
@@ -311,7 +323,6 @@ async function clearCredentials() {
     }
     isAuthenticated = false;
     isOAuthConnected = false;
-    priceInfoMessageShown = false; // Reset message flag when disconnecting
     updateUIState(false);
     
     // Hide disconnect button and authorize button in header
@@ -324,12 +335,6 @@ async function clearCredentials() {
         authorizeBtn.style.display = 'none';
     }
     
-    // Hide price info message
-    const priceInfoMessage = document.getElementById('priceInfoMessage');
-    if (priceInfoMessage) {
-        priceInfoMessage.style.display = 'none';
-        priceInfoMessage.style.marginBottom = '0';
-    }
 }
 
 // Check if user is authenticated
@@ -582,7 +587,6 @@ async function testAuthentication() {
                 authStatusEl.className = 'status-value success';
             }
             isAuthenticated = true;
-            priceInfoMessageShown = false; // Reset message flag for new authentication
             updateUIState(true);
             showToast('Authentication successful', 'success');
             // Auto-load categories when authenticated
@@ -789,17 +793,6 @@ async function displayOffers(offers) {
     
     resultsCountEl.textContent = totalCount;
     
-    // Show price info message only once per authentication session
-    if (!priceInfoMessageShown && isAuthenticated) {
-        const priceInfoMessage = document.getElementById('priceInfoMessage');
-        if (priceInfoMessage) {
-            priceInfoMessage.style.display = 'flex';
-            priceInfoMessage.style.marginBottom = '20px';
-            priceInfoMessageShown = true;
-            startPriceInfoMessageTimer();
-        }
-    }
-    
     if (offers.length === 0) {
         offersListEl.innerHTML = '<p style="text-align: center; padding: 40px; color: #1a73e8;">No product offers found in this category. Try selecting a different category.</p>';
         return;
@@ -815,7 +808,12 @@ async function displayOffers(offers) {
     
     // Fetch full product details for products without images
     // This is done asynchronously to not block the UI
-    const productsWithoutImages = offers.filter(p => !p.images || (Array.isArray(p.images) && p.images.length === 0));
+    const productsWithoutImages = offers.filter(p => {
+        // Check if product has no image in primaryImage or images array
+        const hasPrimaryImage = p.primaryImage && p.primaryImage.url;
+        const hasImages = p.images && Array.isArray(p.images) && p.images.length > 0;
+        return !hasPrimaryImage && !hasImages;
+    });
     if (productsWithoutImages.length > 0) {
         console.log(`Fetching details for ${productsWithoutImages.length} products without images...`);
         // Fetch details for first few products to avoid too many requests
@@ -833,25 +831,33 @@ async function fetchProductDetails(productId) {
         const result = await response.json();
         if (result.success && result.data) {
             const product = result.data;
-            // Update the card if product has images
-            if (product.images && Array.isArray(product.images) && product.images.length > 0) {
-                const card = document.querySelector(`[data-product-id="${productId}"]`);
-                if (card) {
-                    const imageWrapper = card.querySelector('.offer-image-wrapper');
-                    if (imageWrapper) {
-                        const firstImage = product.images[0];
-                        const imageUrl = firstImage.url || firstImage.uri || firstImage.path || firstImage.src || '';
-                        if (imageUrl) {
-                            imageWrapper.innerHTML = `
-                                <img src="${imageUrl}" alt="${escapeHtml(product.name || 'Product')}" class="offer-image" 
-                                     loading="lazy"
-                                     onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                                <div class="offer-image-placeholder" style="display: none;">
-                                    <span>No Image</span>
-                                </div>
-                            `;
-                        }
-                    }
+            const card = document.querySelector(`[data-product-id="${productId}"]`);
+            if (!card) return;
+            
+            let imageUrl = '';
+            
+            // Check primaryImage first (Allegro /sale/offers format)
+            if (product.primaryImage && product.primaryImage.url) {
+                imageUrl = product.primaryImage.url;
+            }
+            // Check images array
+            else if (product.images && Array.isArray(product.images) && product.images.length > 0) {
+                const firstImage = product.images[0];
+                imageUrl = firstImage.url || firstImage.uri || firstImage.path || firstImage.src || '';
+            }
+            
+            // Update the card if we found an image
+            if (imageUrl) {
+                const imageWrapper = card.querySelector('.offer-image-wrapper');
+                if (imageWrapper) {
+                    imageWrapper.innerHTML = `
+                        <img src="${imageUrl}" alt="${escapeHtml(product.name || 'Product')}" class="offer-image" 
+                             loading="lazy"
+                             onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                        <div class="offer-image-placeholder" style="display: none;">
+                            <span>No Image</span>
+                        </div>
+                    `;
                 }
             }
         }
@@ -865,19 +871,12 @@ function createOfferCard(product) {
     // Extract product image - check multiple possible locations
     let mainImage = '';
     
-    // Debug: Log product structure to understand image location
-    if (!product.images || (Array.isArray(product.images) && product.images.length === 0)) {
-        console.log('Product without images:', {
-            id: product.id,
-            name: product.name,
-            allKeys: Object.keys(product),
-            hasImages: !!product.images,
-            imagesValue: product.images
-        });
+    // Method 1: Check primaryImage.url (Allegro /sale/offers API format)
+    if (product.primaryImage && product.primaryImage.url) {
+        mainImage = product.primaryImage.url;
     }
-    
-    // Method 1: Check product.images array (standard Allegro API format)
-    if (product.images) {
+    // Method 2: Check product.images array (standard Allegro API format)
+    else if (product.images) {
         if (Array.isArray(product.images) && product.images.length > 0) {
             const firstImage = product.images[0];
             if (typeof firstImage === 'object' && firstImage !== null) {
@@ -892,25 +891,16 @@ function createOfferCard(product) {
             mainImage = product.images.url || product.images.uri || product.images.path || product.images.src || '';
         }
     }
-    
-    // Method 2: Check alternative image locations (some APIs use different fields)
-    if (!mainImage) {
+    // Method 3: Check alternative image locations (some APIs use different fields)
+    else if (!mainImage) {
         mainImage = product.image || product.imageUrl || product.photo || product.thumbnail || '';
     }
-    
-    // Method 3: Check if images are in a nested structure
-    if (!mainImage && product.media && product.media.images) {
+    // Method 4: Check if images are in a nested structure
+    else if (!mainImage && product.media && product.media.images) {
         if (Array.isArray(product.media.images) && product.media.images.length > 0) {
             const firstMediaImage = product.media.images[0];
             mainImage = firstMediaImage.url || firstMediaImage.uri || firstMediaImage || '';
         }
-    }
-    
-    // Log result
-    if (mainImage) {
-        console.log(`Found image for product ${product.id}:`, mainImage);
-    } else {
-        console.log(`No image found for product ${product.id} - will fetch details`);
     }
     
     // Product ID
@@ -934,7 +924,11 @@ function createOfferCard(product) {
     if (product.category?.name) {
         categoryName = product.category.name;
     }
-    // Second, try to find category name from allCategories array
+    // Second, check cache
+    else if (categoryId !== 'N/A' && categoryNameCache[categoryId]) {
+        categoryName = categoryNameCache[categoryId];
+    }
+    // Third, try to find category name from allCategories array
     else if (categoryId !== 'N/A' && allCategories && allCategories.length > 0) {
         // Try exact match first
         let category = allCategories.find(cat => {
@@ -948,12 +942,24 @@ function createOfferCard(product) {
         
         if (category && category.name) {
             categoryName = category.name;
+            // Cache it
+            categoryNameCache[categoryId] = categoryName;
         } else {
-            // Debug: log when category not found
-            console.log(`Category not found for ID: ${categoryId}`, {
-                productId: product.id,
-                productCategory: product.category,
-                availableCategoryIds: allCategories.slice(0, 10).map(c => c.id)
+            // Try to fetch category name from API asynchronously
+            fetchCategoryName(categoryId).then(name => {
+                if (name && name !== 'N/A') {
+                    categoryNameCache[categoryId] = name;
+                    // Update the card if it's still visible
+                    const card = document.querySelector(`[data-product-id="${productId}"]`);
+                    if (card) {
+                        const categoryEl = card.querySelector('.offer-category');
+                        if (categoryEl) {
+                            categoryEl.textContent = `CATEGORY: ${name}`;
+                        }
+                    }
+                }
+            }).catch(err => {
+                console.log(`Failed to fetch category name for ID ${categoryId}:`, err);
             });
         }
     }
@@ -970,6 +976,7 @@ function createOfferCard(product) {
         });
         if (selectedCategory && selectedCategory.name) {
             categoryName = selectedCategory.name;
+            categoryNameCache[categoryId] = categoryName;
         }
     }
     
@@ -1026,13 +1033,33 @@ function createOfferCard(product) {
         badges.push('LOWEST PRICE');
     }
     
+    // Add publication status as badge
+    if (product.publication?.status) {
+        const status = product.publication.status;
+        if (status === 'ACTIVE') {
+            badges.push('ACTIVE');
+        } else if (status === 'INACTIVE') {
+            badges.push('INACTIVE');
+        } else if (status === 'ENDED') {
+            badges.push('ENDED');
+        }
+    }
+    
     // Extract delivery information
     let deliveryInfo = null;
     if (product.delivery) {
         if (product.delivery.shippingRates) {
-            const shippingRate = product.delivery.shippingRates[0];
-            if (shippingRate?.time) {
-                deliveryInfo = shippingRate.time;
+            const shippingRate = product.delivery.shippingRates;
+            if (typeof shippingRate === 'object' && shippingRate !== null) {
+                // shippingRates might be an object with id, not an array
+                if (shippingRate.time) {
+                    deliveryInfo = shippingRate.time;
+                }
+            } else if (Array.isArray(product.delivery.shippingRates) && product.delivery.shippingRates.length > 0) {
+                const firstRate = product.delivery.shippingRates[0];
+                if (firstRate?.time) {
+                    deliveryInfo = firstRate.time;
+                }
             }
         }
         if (!deliveryInfo && product.delivery.time) {
@@ -1050,6 +1077,35 @@ function createOfferCard(product) {
             if (hasPayLater) {
                 paymentInfo = 'pay later with PAY';
             }
+        }
+    }
+    
+    // Extract stock information
+    let stockInfo = null;
+    if (product.stock) {
+        const available = product.stock.available || 0;
+        const sold = product.stock.sold || 0;
+        if (available > 0) {
+            stockInfo = `Stock: ${available}${sold > 0 ? ` (${sold} sold)` : ''}`;
+        } else if (sold > 0) {
+            stockInfo = `Sold: ${sold}`;
+        }
+    }
+    
+    // Extract stats information
+    let statsInfo = null;
+    if (product.stats) {
+        const watchers = product.stats.watchersCount || 0;
+        const visits = product.stats.visitsCount || 0;
+        const statsParts = [];
+        if (watchers > 0) {
+            statsParts.push(`${watchers} watcher${watchers !== 1 ? 's' : ''}`);
+        }
+        if (visits > 0) {
+            statsParts.push(`${visits} visit${visits !== 1 ? 's' : ''}`);
+        }
+        if (statsParts.length > 0) {
+            statsInfo = statsParts.join(', ');
         }
     }
     
@@ -1079,6 +1135,12 @@ function createOfferCard(product) {
                                 return `<span class="offer-badge badge-super-price">${badge}</span>`;
                             } else if (badge === 'LOWEST PRICE') {
                                 return `<span class="badge-lowest-price">Lowest price guarantee</span>`;
+                            } else if (badge === 'ACTIVE') {
+                                return `<span class="offer-badge badge-active">${badge}</span>`;
+                            } else if (badge === 'INACTIVE') {
+                                return `<span class="offer-badge badge-inactive">${badge}</span>`;
+                            } else if (badge === 'ENDED') {
+                                return `<span class="offer-badge badge-ended">${badge}</span>`;
                             }
                             return '';
                         }).join('') : '<span class="no-data-text">none yet</span>'}
@@ -1127,7 +1189,17 @@ function createOfferCard(product) {
                             <span class="delivery-info-icon" title="Delivery details">i</span>
                         </div>
                     ` : ''}
-                    ${!paymentInfo && !deliveryInfo ? '<div class="no-data-text">none yet</div>' : ''}
+                    ${stockInfo ? `
+                        <div class="stock-info">
+                            <span>${stockInfo}</span>
+                        </div>
+                    ` : ''}
+                    ${statsInfo ? `
+                        <div class="stats-info">
+                            <span>${statsInfo}</span>
+                        </div>
+                    ` : ''}
+                    ${!paymentInfo && !deliveryInfo && !stockInfo && !statsInfo ? '<div class="no-data-text">none yet</div>' : ''}
                 </div>
                 
                 <div class="offer-info">
@@ -1152,6 +1224,7 @@ function updatePagination() {
     const totalCountInfoEl = document.getElementById('totalCountInfo');
     const prevBtn = document.getElementById('prevBtn');
     const nextBtn = document.getElementById('nextBtn');
+    const pageJumpInput = document.getElementById('pageJumpInput');
     
     if (currentOffers.length === 0 && currentPageNumber === 1) {
         paginationEl.style.display = 'none';
@@ -1160,13 +1233,30 @@ function updatePagination() {
     
     paginationEl.style.display = 'flex';
     
+    // Calculate max page number
+    let maxPage = 1;
+    if (totalCount > 0 && currentLimit > 0) {
+        maxPage = Math.ceil(totalCount / currentLimit);
+    }
+    
+    // Update page jump input
+    if (pageJumpInput) {
+        pageJumpInput.value = currentPageNumber;
+        pageJumpInput.max = maxPage;
+        pageJumpInput.min = 1;
+    }
+    
     // For offset-based pagination, check if we have more results
     // If totalCount is available, use it to determine if there are more pages
     // Otherwise, if we got fewer results than the limit, we're on the last page
     const hasMorePages = totalCount > 0 
         ? (currentOffset + currentOffers.length) < totalCount
         : currentOffers.length >= currentLimit;
+    
     let pageInfoText = `Page ${currentPageNumber}`;
+    if (maxPage > 1) {
+        pageInfoText += ` of ${maxPage}`;
+    }
     
     if (currentOffers.length > 0) {
         pageInfoText += ` (${currentOffers.length} offer${currentOffers.length !== 1 ? 's' : ''} on this page)`;
@@ -1223,6 +1313,42 @@ async function changePage(direction) {
             await fetchOffers(currentOffset, currentLimit);
         }
     }
+}
+
+// Jump to specific page
+async function jumpToPage() {
+    const pageJumpInput = document.getElementById('pageJumpInput');
+    if (!pageJumpInput) return;
+    
+    const targetPage = parseInt(pageJumpInput.value, 10);
+    if (isNaN(targetPage) || targetPage < 1) {
+        showToast('Please enter a valid page number', 'error');
+        return;
+    }
+    
+    // Calculate max page
+    let maxPage = 1;
+    if (totalCount > 0 && currentLimit > 0) {
+        maxPage = Math.ceil(totalCount / currentLimit);
+    }
+    
+    if (targetPage > maxPage) {
+        showToast(`Page ${targetPage} does not exist. Maximum page is ${maxPage}.`, 'error');
+        pageJumpInput.value = currentPageNumber;
+        return;
+    }
+    
+    // Calculate offset for target page
+    const targetOffset = (targetPage - 1) * currentLimit;
+    
+    // Clear history and set new values
+    pageHistory = [];
+    currentPageNumber = targetPage;
+    currentOffset = targetOffset;
+    totalProductsSeen = targetOffset;
+    
+    // Fetch offers for target page
+    await fetchOffers(targetOffset, currentLimit);
 }
 
 // Update import buttons state
@@ -1306,7 +1432,12 @@ function displayImportedOffers() {
         // Extract product image - same logic as createOfferCard
         let mainImage = '';
         
-        if (offer.images) {
+        // Method 1: Check primaryImage.url (Allegro /sale/offers API format)
+        if (offer.primaryImage && offer.primaryImage.url) {
+            mainImage = offer.primaryImage.url;
+        }
+        // Method 2: Check offer.images array
+        else if (offer.images) {
             if (Array.isArray(offer.images) && offer.images.length > 0) {
                 const firstImage = offer.images[0];
                 if (typeof firstImage === 'object' && firstImage !== null) {
@@ -1320,8 +1451,8 @@ function displayImportedOffers() {
                 mainImage = offer.images.url || offer.images.uri || offer.images.path || offer.images.src || '';
             }
         }
-        
-        if (!mainImage) {
+        // Method 3: Check alternative image locations
+        else if (!mainImage) {
             mainImage = offer.image || offer.imageUrl || offer.photo || offer.thumbnail || '';
         }
         
@@ -1517,6 +1648,37 @@ async function loadCategories() {
     }
 }
 
+// Fetch category name by ID
+async function fetchCategoryName(categoryId) {
+    if (!categoryId || categoryId === 'N/A') {
+        return 'N/A';
+    }
+    
+    // Check cache first
+    if (categoryNameCache[categoryId]) {
+        return categoryNameCache[categoryId];
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/categories/${categoryId}`);
+        if (!response.ok) {
+            return 'N/A';
+        }
+        
+        const result = await response.json();
+        if (result.success && result.data && result.data.name) {
+            const categoryName = result.data.name;
+            // Cache it
+            categoryNameCache[categoryId] = categoryName;
+            return categoryName;
+        }
+    } catch (error) {
+        console.log(`Error fetching category name for ID ${categoryId}:`, error);
+    }
+    
+    return 'N/A';
+}
+
 // Display categories
 async function displayCategories(categories) {
     const categoriesListEl = document.getElementById('categoriesList');
@@ -1693,26 +1855,6 @@ function clearCategorySelection() {
     updateImportButtons();
 }
 
-// Close price info message
-function closePriceInfoMessage() {
-    // Clear the auto-close timer if it exists
-    if (priceInfoMessageTimer) {
-        clearTimeout(priceInfoMessageTimer);
-        priceInfoMessageTimer = null;
-    }
-    
-    const messageEl = document.getElementById('priceInfoMessage');
-    if (messageEl) {
-        messageEl.classList.add('hiding');
-        setTimeout(() => {
-            messageEl.style.display = 'none';
-            messageEl.classList.remove('hiding');
-            // Remove margin to prevent empty space
-            messageEl.style.marginBottom = '0';
-        }, 300);
-    }
-}
-
 // Close error message
 function closeErrorMessage() {
     const errorEl = document.getElementById('errorMessage');
@@ -1724,20 +1866,6 @@ function closeErrorMessage() {
             errorEl.style.marginBottom = '0';
         }, 300);
     }
-}
-
-// Auto-close price info message after 15 seconds
-let priceInfoMessageTimer = null;
-function startPriceInfoMessageTimer() {
-    // Clear any existing timer
-    if (priceInfoMessageTimer) {
-        clearTimeout(priceInfoMessageTimer);
-    }
-    
-    // Set new timer for 15 seconds
-    priceInfoMessageTimer = setTimeout(() => {
-        closePriceInfoMessage();
-    }, 15000);
 }
 
 // Utility functions

@@ -74,44 +74,35 @@
 
             <!-- Right Content Area - Products -->
             <main class="content-area">
-                <!-- Search Section -->
+                <!-- Combined Tools Section -->
                 <div class="search-section">
-                    <h2>Your Offers</h2>
                     <div id="authRequiredMessage" class="auth-required-message" style="display: none;">
                         Authentication required. Please connect first.
                     </div>
-                    <div class="search-form">
-                        <div class="form-group">
-                            <label for="limit">Offers per Page</label>
-                            <select id="limit" disabled>
-                                <option value="10">10</option>
-                                <option value="20" selected>20</option>
-                                <option value="30">30</option>
-                            </select>
+                    <div class="combined-tools-header" style="display: flex; align-items: center; justify-content: space-between; gap: 15px; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                            <h2 style="margin: 0;">Your Offers <span id="resultsCount" class="count-badge">0</span></h2>
+                            <div class="form-group" style="margin: 0;">
+                                <label for="limit" style="margin-right: 5px;">Offers per Page:</label>
+                                <select id="limit" disabled style="min-width: 80px;">
+                                    <option value="10">10</option>
+                                    <option value="20" selected>20</option>
+                                    <option value="30">30</option>
+                                </select>
+                            </div>
                         </div>
-                        <button id="loadOffersBtn" class="btn btn-primary" disabled>Load My Offers</button>
-                        <button id="clearBtn" class="btn btn-secondary">Clear</button>
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <button id="loadOffersBtn" class="btn btn-primary" disabled>Load My Offers</button>
+                            <button id="clearBtn" class="btn btn-secondary">Clear</button>
+                            <button id="importSelectedBtn" class="btn btn-success" disabled>Import</button>
+                            <button id="importAllBtn" class="btn btn-success" disabled>Import All</button>
+                        </div>
                     </div>
                 </div>
 
                 <!-- Results Section -->
                 <div class="results-section">
-                    <div class="results-header">
-                        <h2>Your Offers <span id="resultsCount" class="count-badge">0</span></h2>
-                        <div class="results-actions">
-                            <button id="importSelectedBtn" class="btn btn-success" disabled>Import</button>
-                            <button id="importAllBtn" class="btn btn-success" disabled>Import All</button>
-                        </div>
-                    </div>
                     
-                    <div class="info-message" id="priceInfoMessage">
-                        <div class="info-message-icon">ℹ</div>
-                        <div class="info-message-content">
-                            Your account is currently set up as a regular user account. To see product prices, you'll need to switch your account to a selling role in the Allegro Developer Portal. Once you do that, you'll be able to access pricing information.
-                        </div>
-                        <button class="info-message-close" onclick="closePriceInfoMessage()" title="Close">×</button>
-                    </div>
-
                     <div id="loadingIndicator" class="loading" style="display: none;">
                         <div class="spinner"></div>
                         <p>Loading...</p>
@@ -123,10 +114,15 @@
                     </div>
 
                     <div class="pagination" id="pagination" style="display: none;">
-                        <div>
+                        <div style="display: flex; align-items: center; gap: 10px;">
                             <button id="prevBtn" class="btn btn-secondary" disabled>Prev</button>
                             <span id="pageInfo">Page 1</span>
                             <button id="nextBtn" class="btn btn-secondary" disabled>Next</button>
+                            <div style="display: flex; align-items: center; gap: 5px; margin-left: 15px;">
+                                <label for="pageJumpInput" style="font-size: 14px; color: #666;">Go to page:</label>
+                                <input type="number" id="pageJumpInput" min="1" value="1" style="width: 60px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                                <button id="pageJumpBtn" class="btn btn-primary btn-small">Go</button>
+                            </div>
                         </div>
                         <span id="totalCountInfo" class="total-count-info"></span>
                     </div>

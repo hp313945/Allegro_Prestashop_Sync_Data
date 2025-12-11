@@ -861,6 +861,36 @@ app.get('/api/categories', async (req, res) => {
 });
 
 /**
+ * Get category by ID
+ */
+app.get('/api/categories/:categoryId', async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    
+    const data = await allegroApiRequest(`/sale/categories/${categoryId}`);
+    
+    res.json({
+      success: true,
+      data: data
+    });
+  } catch (error) {
+    let errorMessage = error.message;
+    if (error.response?.status === 404) {
+      errorMessage = 'Category not found';
+    } else if (error.response?.status === 401) {
+      errorMessage = 'Invalid credentials. Please check your Client ID and Client Secret.';
+    } else if (error.response?.status) {
+      errorMessage = error.response?.data?.message || error.response?.data?.error || errorMessage;
+    }
+    
+    res.status(error.response?.status || 500).json({
+      success: false,
+      error: errorMessage
+    });
+  }
+});
+
+/**
  * Test authentication
  */
 app.get('/api/test-auth', async (req, res) => {
