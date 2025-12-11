@@ -379,10 +379,20 @@ app.get('/api/oauth/authorize', (req, res) => {
   
   const redirectUriEncoded = encodeURIComponent(redirectUri);
   const clientId = encodeURIComponent(userCredentials.clientId);
-  const scope = encodeURIComponent('allegro:api');
   const stateParam = encodeURIComponent(state);
   
-  const authUrl = `${ALLEGRO_AUTH_URL}/authorize?response_type=code&client_id=${clientId}&redirect_uri=${redirectUriEncoded}&scope=${scope}&state=${stateParam}`;
+  // Build authorization URL
+  // Note: Scope is determined by your app configuration in Allegro Developer Portal
+  // If you specify scope here, it must match what's configured in your app
+  // If not specified, Allegro will use the scopes configured for your app
+  let authUrl = `${ALLEGRO_AUTH_URL}/authorize?response_type=code&client_id=${clientId}&redirect_uri=${redirectUriEncoded}&state=${stateParam}`;
+  
+  // Optionally add scope if configured (check your app settings in Developer Portal)
+  // Common scopes: 'allegro:api:sale:offers:read' or leave empty to use app defaults
+  const requestedScope = process.env.OAUTH_SCOPE || ''; // Set OAUTH_SCOPE env var if needed
+  if (requestedScope) {
+    authUrl += `&scope=${encodeURIComponent(requestedScope)}`;
+  }
   
   console.log('OAuth authorization URL:', authUrl);
   console.log('Redirect URI:', redirectUri);
