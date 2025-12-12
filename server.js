@@ -1307,11 +1307,37 @@ app.get('/api/prestashop/test', async (req, res) => {
       console.log('Response content type:', testResponse.headers['content-type']);
       
       // If we get a response (200 = accessible, 401 = needs auth but accessible)
-      // PrestaShop API root returns 200 with XML even without auth
+      // PrestaShop API root returns 200 with XML even without auth, or 401 with HTML/login page
       if (testResponse.status === 200 || testResponse.status === 401) {
         // Check if response contains PrestaShop API structure (XML)
         const responseText = typeof testResponse.data === 'string' ? testResponse.data : JSON.stringify(testResponse.data);
-        if (responseText.includes('<prestashop') || responseText.includes('<api')) {
+        const contentType = testResponse.headers['content-type'] || '';
+        const isHTML = contentType.includes('text/html') || responseText.includes('<!DOCTYPE') || responseText.includes('<html');
+        const isXML = responseText.includes('<prestashop') || responseText.includes('<api') || contentType.includes('xml');
+        
+        // If 401 with HTML, it means auth is required - skip XML check and test with auth
+        if (testResponse.status === 401 && isHTML) {
+          console.log('✓ PrestaShop API is accessible (401 with HTML - authentication required)');
+          
+          // Test with authentication using products endpoint
+          try {
+            const data = await prestashopApiRequest('products?limit=1', 'GET');
+            
+            res.json({
+              success: true,
+              message: 'PrestaShop connection successful! ✓\nAPI is accessible and authentication works.'
+            });
+          } catch (authError) {
+            console.error('Authentication test error:', authError.message);
+            
+            // Provide specific guidance based on error
+            if (authError.response?.status === 401) {
+              throw new Error('PrestaShop API is accessible, but authentication failed.\n\n✅ Correct username & password for PrestaShop API:\n\n🔐 Username:\n➡ Your PrestaShop Webservice API key\nExample: 3QX9F1kKz9Vb8mP2rT6YJHnE4A5D7C8W\n\n🔐 Password:\n➡ Leave EMPTY (do not type anything)\n\n📍 Where to find the API key:\nGo to PrestaShop Back Office → Advanced Parameters → Webservice\nEither copy an existing enabled key, or click "Add new webservice key" → Generate\n\n❌ What NOT to use:\n• Admin email\n• Admin password\n• Database credentials\n• Allegro credentials');
+            }
+            
+            throw authError;
+          }
+        } else if (isXML) {
           console.log('✓ PrestaShop API is accessible (XML response detected)');
           
           // Now test with authentication using products endpoint
@@ -1334,7 +1360,8 @@ app.get('/api/prestashop/test', async (req, res) => {
             throw authError;
           }
         } else {
-          throw new Error(`PrestaShop API returned unexpected response format. Expected XML with <prestashop> or <api> tag.`);
+          // If 200 but not XML, or other unexpected format
+          throw new Error(`PrestaShop API returned unexpected response format. Expected XML with <prestashop> or <api> tag, but got: ${contentType}`);
         }
       } else {
         throw new Error(`PrestaShop API returned unexpected status ${testResponse.status}`);
