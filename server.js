@@ -466,8 +466,13 @@ async function prestashopApiRequest(endpoint, method = 'GET', data = null) {
     
     const url = `${apiUrl}${endpoint}`;
     
-    // Log the URL for debugging (remove in production if needed)
-    console.log('PrestaShop API Request:', method, url);
+    // PrestaShop API accepts JSON format via query parameter
+    // Add output_format=JSON to URL to ensure JSON response (not XML)
+    const separator = url.includes('?') ? '&' : '?';
+    const jsonUrl = `${url}${separator}output_format=JSON`;
+    
+    // Log the URL for debugging
+    console.log('PrestaShop API Request:', method, jsonUrl);
     
     // PrestaShop uses Basic Auth with API key as password
     // Format: Basic base64(api_key:)
@@ -475,11 +480,12 @@ async function prestashopApiRequest(endpoint, method = 'GET', data = null) {
     
     const config = {
       method: method,
-      url: url,
+      url: jsonUrl,
       headers: {
         'Authorization': `Basic ${auth}`,
         'Content-Type': 'application/json',
-        'Output-Format': 'JSON'
+        'Output-Format': 'JSON',
+        'Accept': 'application/json'
       },
       timeout: 15000, // 15 second timeout
       validateStatus: function (status) {
@@ -1271,21 +1277,57 @@ app.get('/api/prestashop/status', (req, res) => {
  */
 app.get('/api/prestashop/test', async (req, res) => {
   try {
-    // Try to fetch shop info - use a simple endpoint that always exists
-    // PrestaShop API root or products endpoint
-    const data = await prestashopApiRequest('products?limit=1', 'GET');
-    res.json({
-      success: true,
-      message: 'PrestaShop connection successful! ✓'
-    });
-  } catch (error) {
-    // Log the actual URL being used for debugging
-    const apiUrl = prestashopCredentials.baseUrl 
-      ? `${prestashopCredentials.baseUrl.replace(/\/+$/, '')}/api/products?limit=1`
-      : 'not configured';
-    console.log('PrestaShop test URL:', apiUrl);
+    if (!prestashopCredentials.baseUrl || !prestashopCredentials.apiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'PrestaShop credentials not configured'
+      });
+    }
+
+    const apiUrl = `${prestashopCredentials.baseUrl.replace(/\/+$/, '')}/api/`;
+    console.log('Testing PrestaShop connection to:', apiUrl);
     
-    // Error message is already user-friendly from prestashopApiRequest
+    // First, test if the API endpoint is accessible (without auth) - this should return XML
+    try {
+      const testResponse = await axios.get(apiUrl, {
+        timeout: 5000,
+        validateStatus: function (status) {
+          return status >= 200 && status < 600;
+        }
+      });
+      
+      console.log('API root test response status:', testResponse.status);
+      
+      // If we get a response (200 = accessible, 401 = needs auth but accessible)
+      if (testResponse.status === 200 || testResponse.status === 401) {
+        // Now test with authentication using products endpoint
+        // This will use output_format=JSON automatically
+        const data = await prestashopApiRequest('products?limit=1', 'GET');
+        
+        res.json({
+          success: true,
+          message: 'PrestaShop connection successful! ✓\nAPI is accessible and authentication works.'
+        });
+      } else {
+        throw new Error(`PrestaShop API returned unexpected status ${testResponse.status}`);
+      }
+    } catch (testError) {
+      console.error('Connection test error:', testError.code, testError.message);
+      
+      // If basic connection fails, provide helpful error
+      if (testError.code === 'ECONNREFUSED' || testError.code === 'ENOTFOUND') {
+        throw new Error(`Cannot reach PrestaShop at ${apiUrl}\n\nPlease check:\n• Is PrestaShop running?\n• Is the URL correct? (you showed it works at http://localhost/poland/api/)\n• Can you access ${apiUrl} in your browser?`);
+      }
+      
+      // If it's an auth error from prestashopApiRequest, pass it through
+      if (testError.response?.status === 401) {
+        throw new Error('PrestaShop API is accessible, but authentication failed.\n\nPlease check:\n• Is the API key correct?\n• Is the API key enabled in PrestaShop Admin?\n• Go to: Advanced Parameters → Webservice');
+      }
+      
+      throw testError;
+    }
+  } catch (error) {
+    // Error message is already user-friendly
     res.status(error.response?.status || 500).json({
       success: false,
       error: error.message

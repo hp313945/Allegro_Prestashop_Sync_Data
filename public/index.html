@@ -3,120 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Allegro Importer</title>
+    <title>Allegro → PrestaShop Integration</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <!-- Credentials Section (shown initially) -->
-    <div class="credentials-overlay" id="credentialsOverlay">
-        <div class="credentials-modal" style="max-width: 900px;">
-            <h1 style="margin-bottom: 30px;">Allegro → PrestaShop Integration</h1>
-            
-            <!-- Tabs for Configuration -->
-            <div class="config-tabs">
-                <button class="config-tab active" data-tab="allegro">
-                    <span class="tab-icon">🔵</span>
-                    <span>Allegro API</span>
-                </button>
-                <button class="config-tab" data-tab="prestashop">
-                    <span class="tab-icon">🛒</span>
-                    <span>PrestaShop</span>
-                </button>
-            </div>
-            
-            <!-- Allegro Tab Content -->
-            <div class="config-tab-content active" id="allegroTab">
-                <div class="credentials-section">
-                    <h2 style="margin-top: 0;">Step 1: Connect to Allegro</h2>
-                    <p style="color: #666; margin-bottom: 20px;">Enter your Allegro API credentials to import offers</p>
-                    <div class="credentials-form">
-                        <div class="form-group">
-                            <label for="clientId">Client ID</label>
-                            <input type="text" id="clientId" placeholder="Enter your Allegro Client ID" autocomplete="off">
-                        </div>
-                        <div class="form-group">
-                            <label for="clientSecret">Client Secret</label>
-                            <input type="password" id="clientSecret" placeholder="Enter your Allegro Client Secret" autocomplete="off">
-                        </div>
-                        <div style="display: flex; gap: 10px; margin-top: 20px;">
-                            <button id="saveCredentialsBtn" class="btn btn-primary" style="flex: 1;">CONNECT TO ALLEGRO</button>
-                            <button id="clearCredentialsBtn" class="btn btn-secondary" style="display: none;">Clear</button>
-                        </div>
-                    </div>
-                    <div id="credentialsMessage" class="message" style="display: none;"></div>
-                </div>
-            </div>
-            
-            <!-- PrestaShop Tab Content -->
-            <div class="config-tab-content" id="prestashopTab">
-                <div class="credentials-section">
-                    <h2 style="margin-top: 0;">Step 2: Connect to PrestaShop</h2>
-                    <p style="color: #666; margin-bottom: 20px;">Configure your PrestaShop store to export products</p>
-                    <div class="credentials-form">
-                        <div class="form-group">
-                            <label for="prestashopUrl">
-                                PrestaShop Base URL
-                                <span class="help-icon" title="The base URL of your PrestaShop installation, without /api/">ℹ️</span>
-                            </label>
-                            <input type="text" id="prestashopUrl" placeholder="http://localhost/poland" value="http://localhost/poland" autocomplete="off">
-                            <small style="color: #666; font-size: 12px; display: block; margin-top: 5px;">
-                                Example: <code>http://localhost/poland</code> or <code>https://yourdomain.com</code><br>
-                                <strong>Important:</strong> Make sure you can access this URL in your browser first!
-                            </small>
-                        </div>
-                        <div class="form-group">
-                            <label for="prestashopApiKey">
-                                API Key
-                                <span class="help-icon" title="Generate from PrestaShop Admin: Advanced Parameters → Web Service">ℹ️</span>
-                            </label>
-                            <input type="password" id="prestashopApiKey" placeholder="Enter your PrestaShop API Key" autocomplete="off">
-                            <small style="color: #666; font-size: 12px; display: block; margin-top: 5px;">
-                                Generate from: <strong>Advanced Parameters → Web Service</strong>
-                            </small>
-                        </div>
-                        <div class="form-group" style="background: #f8f9fa; padding: 15px; border-radius: 6px; margin: 20px 0;">
-                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin: 0;">
-                                <input type="checkbox" id="disableStockSyncToAllegro" style="width: auto;">
-                                <span style="font-weight: normal;">Disable PrestaShop → Allegro stock updates</span>
-                            </label>
-                            <small style="color: #666; font-size: 12px; display: block; margin-top: 8px; margin-left: 28px;">
-                                When checked, stock changes in PrestaShop won't sync back to Allegro
-                            </small>
-                        </div>
-                        <div style="display: flex; gap: 10px; margin-top: 20px;">
-                            <button id="testPrestashopBtn" class="btn btn-secondary" style="flex: 1;">Test Connection</button>
-                            <button id="savePrestashopBtn" class="btn btn-primary" style="flex: 1;">Save Configuration</button>
-                        </div>
-                    </div>
-                    <div id="prestashopMessage" class="message" style="display: none;"></div>
-                    
-                    <!-- Troubleshooting Tips -->
-                    <div style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin-top: 20px; border-radius: 4px;">
-                        <strong style="color: #1976d2; display: block; margin-bottom: 10px;">💡 Troubleshooting Tips:</strong>
-                        <ul style="margin: 0; padding-left: 20px; color: #555; font-size: 13px; line-height: 1.8;">
-                            <li>Verify PrestaShop is running: Open <code>http://localhost/poland</code> in your browser</li>
-                            <li>Check Web Service is enabled: <strong>Advanced Parameters → Webservice</strong></li>
-                            <li>Test API manually: Try <code>http://localhost/poland/api/</code> in browser (should show API info)</li>
-                            <li>If using custom port: Include it in URL (e.g., <code>http://localhost:8080/poland</code>)</li>
-                            <li>SSL warning is normal for localhost - HTTP works fine for testing</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Main Application Layout -->
-    <div id="mainApp" class="main-app" style="display: none;">
-        <!-- Top Header with User Info -->
+    <!-- Main Application Layout - Always Visible -->
+    <div id="mainApp" class="main-app">
+        <!-- Top Header -->
         <header class="top-header">
             <div class="header-content">
                 <div class="app-title">
-                    <h1>Allegro Importer</h1>
+                    <h1>Allegro → PrestaShop Integration</h1>
                 </div>
                 <div class="user-info">
                     <div class="status-item">
-                        <span class="status-label">Status</span>
+                        <span class="status-label">Allegro</span>
                         <span id="apiStatus" class="status-value">Disconnected</span>
                     </div>
                     <div class="status-item">
@@ -137,105 +38,164 @@
             </div>
         </header>
 
-        <!-- Main Content Area -->
-        <div class="main-content-wrapper">
-            <!-- Left Sidebar - Categories -->
-            <aside class="sidebar">
-                <div class="sidebar-header">
-                    <h2>Categories</h2>
-                    <div class="sidebar-actions">
-                        <button id="loadCategoriesBtn" class="btn btn-primary btn-small">Reload</button>
-                        <button id="clearCategoryBtn" class="btn btn-secondary btn-small">Clear</button>
+        <!-- Main Content Area - Full Screen Dashboard -->
+        <div class="dashboard-container">
+            <!-- Configuration Panel - Top Section -->
+            <div class="config-panel">
+                <div class="config-section">
+                    <div class="config-header">
+                        <h2>🔵 Allegro API Configuration</h2>
+                        <span id="allegroConfigStatus" class="config-status">Not Configured</span>
                     </div>
-                </div>
-                <div class="categories-list" id="categoriesList"></div>
-            </aside>
-
-            <!-- Right Content Area - Products -->
-            <main class="content-area">
-                <!-- Combined Tools Section -->
-                <div class="search-section">
-                    <div id="authRequiredMessage" class="auth-required-message" style="display: none;">
-                        Authentication required. Please connect first.
-                    </div>
-                    <div class="combined-tools-header" style="display: flex; align-items: center; justify-content: space-between; gap: 15px; flex-wrap: wrap;">
-                        <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
-                            <h2 style="margin: 0;">Your Offers <span id="resultsCount" class="count-badge">0</span></h2>
-                            <div class="form-group" style="margin: 0;">
-                                <label for="limit" style="margin-right: 5px;">Offers per Page:</label>
-                                <select id="limit" disabled style="min-width: 80px;">
-                                    <option value="10">10</option>
-                                    <option value="20" selected>20</option>
-                                    <option value="30">30</option>
-                                </select>
+                    <div class="config-content">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="clientId">Client ID</label>
+                                <input type="text" id="clientId" placeholder="Enter Allegro Client ID" autocomplete="off">
+                            </div>
+                            <div class="form-group">
+                                <label for="clientSecret">Client Secret</label>
+                                <input type="password" id="clientSecret" placeholder="Enter Allegro Client Secret" autocomplete="off">
                             </div>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                            <button id="loadOffersBtn" class="btn btn-primary" disabled>Load My Offers</button>
-                            <button id="clearBtn" class="btn btn-secondary">Clear</button>
-                            <button id="importSelectedBtn" class="btn btn-success" disabled>Import</button>
-                            <button id="importAllBtn" class="btn btn-success" disabled>Import All</button>
+                        <div class="form-actions">
+                            <button id="saveCredentialsBtn" class="btn btn-primary">Connect to Allegro</button>
+                            <button id="clearCredentialsBtn" class="btn btn-secondary" style="display: none;">Clear</button>
                         </div>
+                        <div id="credentialsMessage" class="message" style="display: none;"></div>
                     </div>
                 </div>
 
-                <!-- Results Section -->
-                <div class="results-section">
-                    
-                    <div id="loadingIndicator" class="loading" style="display: none;">
-                        <div class="spinner"></div>
-                        <p>Loading...</p>
+                <div class="config-section">
+                    <div class="config-header">
+                        <h2>🛒 PrestaShop Configuration</h2>
+                        <span id="prestashopConfigStatus" class="config-status">Not Configured</span>
                     </div>
-
-                    <div id="errorMessage" class="error-message" style="display: none;">
-                        <div class="error-message-content"></div>
-                        <button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>
-                    </div>
-
-                    <div class="pagination" id="pagination" style="display: none;">
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <button id="prevBtn" class="btn btn-secondary" disabled>Prev</button>
-                            <span id="pageInfo">Page 1</span>
-                            <button id="nextBtn" class="btn btn-secondary" disabled>Next</button>
-                            <div style="display: flex; align-items: center; gap: 5px; margin-left: 15px;">
-                                <label for="pageJumpInput" style="font-size: 14px; color: #666;">Go to page:</label>
-                                <input type="number" id="pageJumpInput" min="1" value="1" style="width: 60px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
-                                <button id="pageJumpBtn" class="btn btn-primary btn-small">Go</button>
+                    <div class="config-content">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="prestashopUrl">Base URL</label>
+                                <input type="text" id="prestashopUrl" placeholder="http://localhost/poland" value="http://localhost/poland" autocomplete="off">
+                                <small>Example: http://localhost/poland</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="prestashopApiKey">API Key</label>
+                                <input type="password" id="prestashopApiKey" placeholder="Enter PrestaShop API Key" autocomplete="off">
+                                <small>From: Advanced Parameters → Web Service</small>
                             </div>
                         </div>
-                        <span id="totalCountInfo" class="total-count-info"></span>
+                        <div class="form-row">
+                            <div class="form-group" style="flex: 1;">
+                                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                    <input type="checkbox" id="disableStockSyncToAllegro" style="width: auto;">
+                                    <span>Disable PrestaShop → Allegro stock updates</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button id="testPrestashopBtn" class="btn btn-secondary">Test Connection</button>
+                            <button id="savePrestashopBtn" class="btn btn-primary">Save Configuration</button>
+                        </div>
+                        <div id="prestashopMessage" class="message" style="display: none;"></div>
                     </div>
-
-                    <div id="offersList" class="offers-grid"></div>
                 </div>
+            </div>
 
-                <!-- Imported Products Section -->
-                <div class="imported-section">
-                    <div class="imported-section-header">
-                        <h2>Imported Products <span id="importedCount" class="count-badge">0</span></h2>
-                        <div class="imported-section-actions">
-                            <button id="clearImportedBtn" class="btn btn-secondary btn-small" disabled>Clear Imported</button>
-                            <button id="loadPrestashopCategoriesBtn" class="btn btn-primary btn-small" disabled>Load PrestaShop Categories</button>
-                            <button id="exportToPrestashopBtn" class="btn btn-success btn-small" disabled>Export to PrestaShop</button>
+            <!-- Main Content Wrapper -->
+            <div class="main-content-wrapper">
+                <!-- Left Sidebar - Categories -->
+                <aside class="sidebar">
+                    <div class="sidebar-header">
+                        <h2>Allegro Categories</h2>
+                        <div class="sidebar-actions">
+                            <button id="loadCategoriesBtn" class="btn btn-primary btn-small">Reload</button>
+                            <button id="clearCategoryBtn" class="btn btn-secondary btn-small">Clear</button>
                         </div>
                     </div>
-                    <div id="importedList" class="imported-list"></div>
-                </div>
+                    <div class="categories-list" id="categoriesList"></div>
+                </aside>
 
-                <!-- PrestaShop Categories Section -->
-                <div class="imported-section" id="prestashopCategoriesSection" style="display: none;">
-                    <div class="imported-section-header">
-                        <h2>PrestaShop Categories</h2>
-                        <div class="imported-section-actions">
-                            <label style="display: flex; align-items: center; gap: 10px; font-size: 14px;">
-                                <input type="checkbox" id="autoCreateCategories" checked>
-                                Auto-create categories if not found
-                            </label>
+                <!-- Right Content Area - Products & Import -->
+                <main class="content-area">
+                    <!-- Offers Section -->
+                    <div class="section-card">
+                        <div class="section-header">
+                            <h2>Your Allegro Offers <span id="resultsCount" class="count-badge">0</span></h2>
+                            <div class="section-actions">
+                                <div class="form-group-inline">
+                                    <label for="limit">Per Page:</label>
+                                    <select id="limit" disabled style="min-width: 80px;">
+                                        <option value="10">10</option>
+                                        <option value="20" selected>20</option>
+                                        <option value="30">30</option>
+                                    </select>
+                                </div>
+                                <button id="loadOffersBtn" class="btn btn-primary" disabled>Load Offers</button>
+                                <button id="clearBtn" class="btn btn-secondary">Clear</button>
+                                <button id="importSelectedBtn" class="btn btn-success" disabled>Import Selected</button>
+                                <button id="importAllBtn" class="btn btn-success" disabled>Import All</button>
+                            </div>
                         </div>
+                        
+                        <div id="authRequiredMessage" class="auth-required-message" style="display: none;">
+                            Authentication required. Please configure Allegro API first.
+                        </div>
+
+                        <div id="loadingIndicator" class="loading" style="display: none;">
+                            <div class="spinner"></div>
+                            <p>Loading...</p>
+                        </div>
+
+                        <div id="errorMessage" class="error-message" style="display: none;">
+                            <div class="error-message-content"></div>
+                            <button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>
+                        </div>
+
+                        <div class="pagination" id="pagination" style="display: none;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <button id="prevBtn" class="btn btn-secondary" disabled>Prev</button>
+                                <span id="pageInfo">Page 1</span>
+                                <button id="nextBtn" class="btn btn-secondary" disabled>Next</button>
+                                <div style="display: flex; align-items: center; gap: 5px; margin-left: 15px;">
+                                    <label for="pageJumpInput" style="font-size: 14px; color: #666;">Go to:</label>
+                                    <input type="number" id="pageJumpInput" min="1" value="1" style="width: 60px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <button id="pageJumpBtn" class="btn btn-primary btn-small">Go</button>
+                                </div>
+                            </div>
+                            <span id="totalCountInfo" class="total-count-info"></span>
+                        </div>
+
+                        <div id="offersList" class="offers-grid"></div>
                     </div>
-                    <div id="prestashopCategoriesList" class="imported-list"></div>
-                </div>
-            </main>
+
+                    <!-- Imported Products Section -->
+                    <div class="section-card">
+                        <div class="section-header">
+                            <h2>Imported Products <span id="importedCount" class="count-badge">0</span></h2>
+                            <div class="section-actions">
+                                <button id="clearImportedBtn" class="btn btn-secondary btn-small" disabled>Clear</button>
+                                <button id="loadPrestashopCategoriesBtn" class="btn btn-primary btn-small" disabled>Load PrestaShop Categories</button>
+                                <button id="exportToPrestashopBtn" class="btn btn-success btn-small" disabled>Export to PrestaShop</button>
+                            </div>
+                        </div>
+                        <div id="importedList" class="imported-list"></div>
+                    </div>
+
+                    <!-- PrestaShop Categories Section -->
+                    <div class="section-card" id="prestashopCategoriesSection" style="display: none;">
+                        <div class="section-header">
+                            <h2>PrestaShop Categories</h2>
+                            <div class="section-actions">
+                                <label style="display: flex; align-items: center; gap: 10px; font-size: 14px;">
+                                    <input type="checkbox" id="autoCreateCategories" checked>
+                                    Auto-create categories if not found
+                                </label>
+                            </div>
+                        </div>
+                        <div id="prestashopCategoriesList" class="imported-list"></div>
+                    </div>
+                </main>
+            </div>
         </div>
     </div>
 

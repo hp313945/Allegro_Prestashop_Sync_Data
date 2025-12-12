@@ -26,34 +26,41 @@ const API_BASE = '';
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
-    // Always start with first interface - no auto-loading
-    hideMainInterface();
+    // Show main interface immediately - no modal
+    showMainInterface();
     setupEventListeners();
     loadImportedOffers();
-    setupConfigTabs();
+    loadPrestashopConfig();
+    checkPrestashopStatus();
     // Initially disable all actions until authenticated
     updateUIState(false);
 });
 
-// Setup configuration tabs
-function setupConfigTabs() {
-    const tabs = document.querySelectorAll('.config-tab');
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            const targetTab = tab.dataset.tab;
-            
-            // Remove active class from all tabs and contents
-            document.querySelectorAll('.config-tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.config-tab-content').forEach(c => c.classList.remove('active'));
-            
-            // Add active class to clicked tab and corresponding content
-            tab.classList.add('active');
-            const content = document.getElementById(targetTab + 'Tab');
-            if (content) {
-                content.classList.add('active');
-            }
-        });
-    });
+// Update config status indicators
+function updateConfigStatuses() {
+    // Update Allegro status
+    const allegroStatus = document.getElementById('allegroConfigStatus');
+    if (allegroStatus) {
+        if (isAuthenticated) {
+            allegroStatus.textContent = 'Connected';
+            allegroStatus.className = 'config-status success';
+        } else {
+            allegroStatus.textContent = 'Not Configured';
+            allegroStatus.className = 'config-status';
+        }
+    }
+    
+    // Update PrestaShop status
+    const prestashopStatusEl = document.getElementById('prestashopConfigStatus');
+    if (prestashopStatusEl) {
+        if (prestashopConfigured) {
+            prestashopStatusEl.textContent = 'Configured';
+            prestashopStatusEl.className = 'config-status success';
+        } else {
+            prestashopStatusEl.textContent = 'Not Configured';
+            prestashopStatusEl.className = 'config-status';
+        }
+    }
 }
 
 // Setup event listeners
@@ -265,6 +272,9 @@ async function saveCredentials() {
                 clearBtnHeader.style.display = 'block';
             }
             
+            // Update config status indicators
+            updateConfigStatuses();
+            
             // Update UI state
             updateUIState(true);
             
@@ -325,11 +335,7 @@ async function sendCredentialsToBackend(clientId, clientSecret) {
 
 // Show main interface
 function showMainInterface() {
-    const credentialsOverlay = document.getElementById('credentialsOverlay');
     const mainApp = document.getElementById('mainApp');
-    if (credentialsOverlay) {
-        credentialsOverlay.style.display = 'none';
-    }
     if (mainApp) {
         mainApp.style.display = 'flex';
     }
@@ -337,14 +343,8 @@ function showMainInterface() {
 
 // Hide main interface
 function hideMainInterface() {
-    const credentialsOverlay = document.getElementById('credentialsOverlay');
-    const mainApp = document.getElementById('mainApp');
-    if (credentialsOverlay) {
-        credentialsOverlay.style.display = 'flex';
-    }
-    if (mainApp) {
-        mainApp.style.display = 'none';
-    }
+    // Always show main interface now - no modal
+    // Keep function for compatibility
 }
 
 // Clear credentials
@@ -2042,6 +2042,7 @@ async function testPrestashopConnection() {
         if (testData.success) {
             showToast('✓ ' + testData.message, 'success');
             prestashopConfigured = true;
+            updateConfigStatuses();
             checkPrestashopStatus();
         } else {
             // Show error with line breaks if it contains \n
@@ -2087,12 +2088,16 @@ async function checkPrestashopStatus() {
         const data = await response.json();
         
         prestashopConfigured = data.configured;
+        
+        // Update header status
         const statusEl = document.getElementById('prestashopStatus');
         if (statusEl) {
             statusEl.textContent = data.configured ? 'Configured' : 'Not Configured';
             statusEl.style.color = data.configured ? '#28a745' : '#dc3545';
         }
         
+        // Update config panel status
+        updateConfigStatuses();
         updateExportButtonState();
     } catch (error) {
         console.error('Error checking PrestaShop status:', error);
