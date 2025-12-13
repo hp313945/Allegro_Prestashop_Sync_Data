@@ -2613,8 +2613,8 @@ async function loadCategoriesFromOffers() {
                         if (catName && catName !== 'N/A') {
                             cat.name = catName;
                             categoryNameCache[cat.id] = catName;
-                        }
-                    } catch (error) {
+        }
+    } catch (error) {
                         console.log(`Failed to fetch category name for ${cat.id}:`, error);
                     }
                 }
