@@ -20,6 +20,7 @@ let currentPageNumber = 1; // Track current page number
 // PrestaShop state
 let prestashopCategories = [];
 let prestashopConfigured = false;
+let prestashopAuthorized = false; // Track if PrestaShop connection is successfully tested/authorized
 
 // API Base URL
 const API_BASE = '';
@@ -42,11 +43,11 @@ function updateConfigStatuses() {
     const allegroStatus = document.getElementById('allegroConfigStatus');
     if (allegroStatus) {
         if (isAuthenticated) {
-            allegroStatus.textContent = 'Connected';
+            allegroStatus.textContent = 'Allegro API Configuration Connected';
             allegroStatus.className = 'config-status success';
         } else {
             allegroStatus.textContent = 'Not Configured';
-            allegroStatus.className = 'config-status';
+            allegroStatus.className = 'config-status error';
         }
     }
     
@@ -58,7 +59,7 @@ function updateConfigStatuses() {
             prestashopStatusEl.className = 'config-status success';
         } else {
             prestashopStatusEl.textContent = 'Not Configured';
-            prestashopStatusEl.className = 'config-status';
+            prestashopStatusEl.className = 'config-status error';
         }
     }
 }
@@ -94,13 +95,24 @@ function setupEventListeners() {
     // Add event listener for load offers button
     const loadOffersBtn = document.getElementById('loadOffersBtn');
     if (loadOffersBtn) {
-        loadOffersBtn.addEventListener('click', () => {
+        loadOffersBtn.addEventListener('click', async () => {
             const limit = parseInt(document.getElementById('limit').value);
             currentLimit = limit;
             currentOffset = 0;
             currentPageNumber = 1;
             totalProductsSeen = 0;
             allLoadedOffers = []; // Clear previous offers
+            
+            // Load categories first if not already loaded (required for proper functionality)
+            if (allCategories.length === 0) {
+                try {
+                    await loadCategories();
+                } catch (error) {
+                    // If categories fail to load, still proceed with loading offers
+                    console.warn('Categories failed to load, but continuing with offers:', error);
+                }
+            }
+            
             fetchAllOffers(); // Fetch all offers
         });
     }
@@ -373,17 +385,12 @@ async function clearCredentials() {
     // Hide main interface
     hideMainInterface();
     
-    // Clear API status
-    const apiStatusEl = document.getElementById('apiStatus');
+    // Clear auth status
     const authStatusEl = document.getElementById('authStatus');
     const oauthStatusEl = document.getElementById('oauthStatus');
-    if (apiStatusEl) {
-        apiStatusEl.textContent = 'Disconnected';
-        apiStatusEl.className = 'status-value error';
-    }
     if (authStatusEl) {
         authStatusEl.textContent = 'Pending';
-        authStatusEl.className = 'status-value';
+        authStatusEl.className = 'status-value error';
     }
     if (oauthStatusEl) {
         oauthStatusEl.textContent = 'Not Connected';
@@ -459,12 +466,27 @@ function updateUIState(configured) {
         selectedCategorySelect.disabled = !authenticated;
     }
     
+    // Disable Allegro Categories and Load Offers until PrestaShop is authorized
     if (loadCategoriesBtn) {
-        loadCategoriesBtn.disabled = !authenticated;
+        loadCategoriesBtn.disabled = !authenticated || !prestashopAuthorized;
+        if (!prestashopAuthorized && authenticated) {
+            loadCategoriesBtn.title = 'PrestaShop authorization required';
+        } else if (!authenticated) {
+            loadCategoriesBtn.title = 'Authentication required';
+        } else {
+            loadCategoriesBtn.title = '';
+        }
     }
     
     if (loadOffersBtn) {
-        loadOffersBtn.disabled = !authenticated;
+        loadOffersBtn.disabled = !authenticated || !prestashopAuthorized;
+        if (!prestashopAuthorized && authenticated) {
+            loadOffersBtn.title = 'PrestaShop authorization required';
+        } else if (!authenticated) {
+            loadOffersBtn.title = 'Authentication required';
+        } else {
+            loadOffersBtn.title = '';
+        }
     }
     
     if (importSelectedBtn) {
@@ -487,28 +509,16 @@ function updateUIState(configured) {
     }
 }
 
-// Check API status
+// Check API status (no longer displayed in header, but still used for internal checks)
 async function checkApiStatus() {
     try {
         const response = await fetch(`${API_BASE}/api/health`);
         const data = await response.json();
-        
-        const statusEl = document.getElementById('apiStatus');
-        if (statusEl) {
-            if (data.configured) {
-                statusEl.textContent = 'Configured';
-                statusEl.className = 'status-value success';
-            } else {
-                statusEl.textContent = 'Disconnected';
-                statusEl.className = 'status-value error';
-            }
-        }
+        // Status is now shown in Allegro API Configuration panel
+        updateConfigStatuses();
     } catch (error) {
-        const statusEl = document.getElementById('apiStatus');
-        if (statusEl) {
-            statusEl.textContent = 'Error';
-            statusEl.className = 'status-value error';
-        }
+        // Status is now shown in Allegro API Configuration panel
+        updateConfigStatuses();
     }
 }
 
@@ -1989,8 +1999,11 @@ async function savePrestashopConfig() {
             showToast('✓ PrestaShop configuration saved successfully!', 'success');
             localStorage.setItem('prestashopConfig', JSON.stringify({ url, apiKey, disableStockSync }));
             prestashopConfigured = true;
+            // Note: prestashopAuthorized will be set to true only after successful test connection
+            prestashopAuthorized = false;
             checkPrestashopStatus();
             updateExportButtonState();
+            updateUIState(true); // Update UI state
         } else {
             showToast('✗ ' + (data.error || 'Failed to save configuration'), 'error', 8000);
         }
@@ -2045,8 +2058,10 @@ async function testPrestashopConnection() {
             localStorage.setItem('prestashopConfig', JSON.stringify({ url, apiKey, disableStockSync }));
             showToast('✓ ' + testData.message, 'success');
             prestashopConfigured = true;
+            prestashopAuthorized = true; // Mark PrestaShop as authorized after successful test
             updateConfigStatuses();
             checkPrestashopStatus();
+            updateUIState(true); // Update UI to enable Allegro Categories and Load Offers
         } else {
             // Show error with line breaks if it contains \n
             const errorMsg = (testData.error || 'Connection failed').replace(/\n/g, '<br>');
@@ -2095,18 +2110,28 @@ async function checkPrestashopStatus() {
         
         prestashopConfigured = data.configured;
         
-        // Update header status
-        const statusEl = document.getElementById('prestashopStatus');
-        if (statusEl) {
-            statusEl.textContent = data.configured ? 'Configured' : 'Not Configured';
-            statusEl.style.color = data.configured ? '#28a745' : '#dc3545';
+        // If PrestaShop is configured, check if connection is authorized by testing it
+        // Only set authorized to true if we can successfully test the connection
+        if (prestashopConfigured) {
+            try {
+                const testResponse = await fetch(`${API_BASE}/api/prestashop/test`);
+                const testData = await testResponse.json();
+                prestashopAuthorized = testData.success || false;
+            } catch (error) {
+                prestashopAuthorized = false;
+            }
+        } else {
+            prestashopAuthorized = false;
         }
         
-        // Update config panel status
+        // Update config panel status (header status removed)
         updateConfigStatuses();
         updateExportButtonState();
+        updateUIState(true); // Update UI state to reflect PrestaShop authorization status
     } catch (error) {
         console.error('Error checking PrestaShop status:', error);
+        prestashopAuthorized = false;
+        updateUIState(true); // Update UI state even on error
     }
 }
 

@@ -17,20 +17,12 @@
                 </div>
                 <div class="user-info">
                     <div class="status-item">
-                        <span class="status-label">Allegro</span>
-                        <span id="apiStatus" class="status-value">Disconnected</span>
-                    </div>
-                    <div class="status-item">
                         <span class="status-label">Auth</span>
-                        <span id="authStatus" class="status-value">Pending</span>
+                        <span id="authStatus" class="status-value error">Pending</span>
                     </div>
                     <div class="status-item">
                         <span class="status-label">Account</span>
-                        <span id="oauthStatus" class="status-value">Not Connected</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">PrestaShop</span>
-                        <span id="prestashopStatus" class="status-value">Not Configured</span>
+                        <span id="oauthStatus" class="status-value error">Not Connected</span>
                     </div>
                     <button id="authorizeAccountBtn" class="btn btn-primary btn-small" style="display: none;">Authorize Account</button>
                     <button id="clearCredentialsBtnHeader" class="btn btn-secondary btn-small" style="display: none;">Disconnect</button>
