@@ -1514,6 +1514,18 @@ function createOfferCard(product) {
         }
     }
     
+    // Determine status badge (ACTIVE / ENDED / INACTIVE)
+    let statusBadge = '';
+    if (Array.isArray(badges) && badges.length > 0) {
+        if (badges.includes('ACTIVE')) {
+            statusBadge = 'ACTIVE';
+        } else if (badges.includes('ENDED')) {
+            statusBadge = 'ENDED';
+        } else if (badges.includes('INACTIVE')) {
+            statusBadge = 'INACTIVE';
+        }
+    }
+    
     // Product ID
     const productId = product.id || 'N/A';
     
@@ -1757,6 +1769,40 @@ function createOfferCard(product) {
                         <span>No Image</span>
                     </div>
                 `}
+                ${statusBadge ? `
+                    <div class="offer-status-badge ${
+                        statusBadge === 'ACTIVE' ? 'offer-status-active' : 
+                        (statusBadge === 'ENDED' ? 'offer-status-ended' : 'offer-status-inactive')
+                    }">
+                        ${statusBadge}
+                    </div>
+                ` : ''}
+                ${(stockInfo || statsInfo) ? `
+                    <div class="offer-metrics offer-metrics-overlay">
+                        ${stockInfo ? `
+                            <div class="metric metric-stock" title="Current stock">
+                                <span class="metric-icon metric-icon-stock">📦</span>
+                                <span class="metric-label">Stock</span>
+                                <span class="metric-value">${stockInfo.available}</span>
+                                ${stockInfo.sold > 0 ? `<span class="metric-sub">(${stockInfo.sold} sold)</span>` : ''}
+                            </div>
+                        ` : ''}
+                        ${watchersCount > 0 ? `
+                            <div class="metric metric-watchers" title="People watching this offer">
+                                <span class="metric-icon metric-icon-watchers">★</span>
+                                <span class="metric-label">Watchers</span>
+                                <span class="metric-value">${watchersCount}</span>
+                            </div>
+                        ` : ''}
+                        ${visitsCount > 0 ? `
+                            <div class="metric metric-visits" title="Listing visits">
+                                <span class="metric-icon metric-icon-visits">👁</span>
+                                <span class="metric-label">Visits</span>
+                                <span class="metric-value">${visitsCount}</span>
+                            </div>
+                        ` : ''}
+                    </div>
+                ` : ''}
             </div>
             <div class="offer-content">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
@@ -1768,12 +1814,6 @@ function createOfferCard(product) {
                                 return `<span class="offer-badge badge-super-price">${badge}</span>`;
                             } else if (badge === 'LOWEST PRICE') {
                                 return `<span class="badge-lowest-price">Lowest price guarantee</span>`;
-                            } else if (badge === 'ACTIVE') {
-                                return `<span class="offer-badge badge-active">${badge}</span>`;
-                            } else if (badge === 'INACTIVE') {
-                                return `<span class="offer-badge badge-inactive">${badge}</span>`;
-                            } else if (badge === 'ENDED') {
-                                return `<span class="offer-badge badge-ended">${badge}</span>`;
                             }
                             return '';
                         }).join('') : '<span class="no-data-text">none yet</span>'}
@@ -1826,32 +1866,6 @@ function createOfferCard(product) {
                 </div>
                 
                 <div class="offer-info">
-                    ${(stockInfo || statsInfo) ? `
-                        <div class="offer-metrics">
-                            ${stockInfo ? `
-                                <div class="metric metric-stock" title="Current stock">
-                                    <span class="metric-icon metric-icon-stock">📦</span>
-                                    <span class="metric-label">Stock</span>
-                                    <span class="metric-value">${stockInfo.available}</span>
-                                    ${stockInfo.sold > 0 ? `<span class="metric-sub">(${stockInfo.sold} sold)</span>` : ''}
-                                </div>
-                            ` : ''}
-                            ${watchersCount > 0 ? `
-                                <div class="metric metric-watchers" title="People watching this offer">
-                                    <span class="metric-icon metric-icon-watchers">★</span>
-                                    <span class="metric-label">Watchers</span>
-                                    <span class="metric-value">${watchersCount}</span>
-                                </div>
-                            ` : ''}
-                            ${visitsCount > 0 ? `
-                                <div class="metric metric-visits" title="Listing visits">
-                                    <span class="metric-icon metric-icon-visits">👁</span>
-                                    <span class="metric-label">Visits</span>
-                                    <span class="metric-value">${visitsCount}</span>
-                                </div>
-                            ` : ''}
-                        </div>
-                    ` : ''}
                     <div class="offer-info-row">
                         <span class="info-label">Product ID:</span>
                         <span class="info-value product-id">${productId.substring(0, 8)}...</span>
