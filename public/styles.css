@@ -432,9 +432,12 @@ body {
 }
 
 .sidebar-header {
-    margin-bottom: 20px;
-    padding-bottom: 15px;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
     border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
 .sidebar-header h2 {
@@ -442,6 +445,28 @@ body {
     color: #333;
     margin-bottom: 12px;
     font-weight: 500;
+}
+
+.sidebar-header-sub {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.category-search-input,
+.category-dropdown {
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid #e0e0e0;
+    font-size: 0.85em;
+}
+
+.category-search-input:focus,
+.category-dropdown:focus {
+    outline: none;
+    border-color: #1a73e8;
+    box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.15);
 }
 
 .sidebar-actions {
@@ -454,7 +479,7 @@ body {
     flex-direction: column;
     gap: 8px;
     overflow-y: auto;
-    flex: 1;
+    max-height: 350px;
     padding-right: 5px;
 }
 
@@ -1108,14 +1133,16 @@ body {
 }
 
 .current-price {
-    font-size: 1em;
-    font-weight: 600;
-    color: #333;
+    font-size: 1.05em;
+    font-weight: 700;
+    color: #1a73e8; /* highlight price for quick scanning */
 }
 
 .price-currency {
-    font-size: 0.9em;
-    font-weight: 500;
+    font-size: 0.85em;
+    font-weight: 600;
+    color: #1a73e8;
+    opacity: 0.85;
 }
 
 .price-info {
@@ -1198,6 +1225,74 @@ body {
     font-size: 0.7em;
     color: #999;
     font-style: italic;
+}
+
+/* Stock / Watchers / Visits metrics */
+.offer-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 0.7em;
+}
+
+.metric {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: #f1f3f4;
+}
+
+.metric-icon {
+    font-size: 0.85em;
+}
+
+.metric-label {
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    font-weight: 600;
+    color: #555;
+}
+
+.metric-value {
+    font-weight: 700;
+    color: #222;
+}
+
+.metric-sub {
+    color: #777;
+}
+
+.metric-stock {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+
+.metric-stock .metric-label,
+.metric-stock .metric-value {
+    color: #2e7d32;
+}
+
+.metric-watchers {
+    background: #f3e8fd;
+    color: #6a1b9a;
+}
+
+.metric-watchers .metric-label,
+.metric-watchers .metric-value {
+    color: #6a1b9a;
+}
+
+.metric-visits {
+    background: #e0f7fa;
+    color: #006064;
+}
+
+.metric-visits .metric-label,
+.metric-visits .metric-value {
+    color: #006064;
 }
 
 /* Info Section */

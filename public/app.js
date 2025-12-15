@@ -1002,7 +1002,8 @@ async function fetchAllOffers() {
     try {
         let allOffers = [];
         let offset = 0;
-        const limit = 1000; // Use maximum limit to fetch more at once
+        // Use moderate page size so first screen appears faster
+        const limit = 200;
         let hasMore = true;
         let totalCountFromAPI = null;
         
@@ -1499,11 +1500,17 @@ function createOfferCard(product) {
     else if (!mainImage) {
         mainImage = product.image || product.imageUrl || product.photo || product.thumbnail || '';
     }
-    // Method 4: Check if images are in a nested structure
-    else if (!mainImage && product.media && product.media.images) {
+    // Method 4: Check if images are in a nested structure (e.g. product.media.images)
+    // This must be a separate check (not "else if") so it still runs
+    // when previous strategies didn't find any usable image URL.
+    if (!mainImage && product.media && product.media.images) {
         if (Array.isArray(product.media.images) && product.media.images.length > 0) {
             const firstMediaImage = product.media.images[0];
-            mainImage = firstMediaImage.url || firstMediaImage.uri || firstMediaImage || '';
+            if (typeof firstMediaImage === 'object' && firstMediaImage !== null) {
+                mainImage = firstMediaImage.url || firstMediaImage.uri || firstMediaImage.path || firstMediaImage.src || '';
+            } else if (typeof firstMediaImage === 'string' && firstMediaImage.startsWith('http')) {
+                mainImage = firstMediaImage;
+            }
         }
     }
     
@@ -1701,27 +1708,34 @@ function createOfferCard(product) {
     
     // Extract stock information
     let stockInfo = null;
+    let stockAvailable = null;
+    let stockSold = null;
     if (product.stock) {
-        const available = product.stock.available || 0;
-        const sold = product.stock.sold || 0;
-        if (available > 0) {
-            stockInfo = `Stock: ${available}${sold > 0 ? ` (${sold} sold)` : ''}`;
-        } else if (sold > 0) {
-            stockInfo = `Sold: ${sold}`;
-        }
+        stockAvailable = typeof product.stock.available === 'number' ? product.stock.available : (product.stock.available || 0);
+        stockSold = typeof product.stock.sold === 'number' ? product.stock.sold : (product.stock.sold || 0);
+        if (stockAvailable > 0 || stockSold > 0) {
+            stockInfo = {
+                available: stockAvailable,
+                sold: stockSold
+            };
+        } 
     }
     
-    // Extract stats information
+    // Extract stats information (watchers & visits)
     let statsInfo = null;
+    let watchersCount = null;
+    let visitsCount = null;
     if (product.stats) {
-        const watchers = product.stats.watchersCount || 0;
-        const visits = product.stats.visitsCount || 0;
+        const watchers = product.stats.watchersCount;
+        const visits = product.stats.visitsCount;
+        watchersCount = typeof watchers === 'number' ? watchers : (watchers || 0);
+        visitsCount = typeof visits === 'number' ? visits : (visits || 0);
         const statsParts = [];
-        if (watchers > 0) {
-            statsParts.push(`${watchers} watcher${watchers !== 1 ? 's' : ''}`);
+        if (watchersCount > 0) {
+            statsParts.push(`${watchersCount} watcher${watchersCount !== 1 ? 's' : ''}`);
         }
-        if (visits > 0) {
-            statsParts.push(`${visits} visit${visits !== 1 ? 's' : ''}`);
+        if (visitsCount > 0) {
+            statsParts.push(`${visitsCount} visit${visitsCount !== 1 ? 's' : ''}`);
         }
         if (statsParts.length > 0) {
             statsInfo = statsParts.join(', ');
@@ -1808,14 +1822,30 @@ function createOfferCard(product) {
                             <span class="delivery-info-icon" title="Delivery details">i</span>
                         </div>
                     ` : ''}
-                    ${stockInfo ? `
-                        <div class="stock-info">
-                            <span>${stockInfo}</span>
-                        </div>
-                    ` : ''}
-                    ${statsInfo ? `
-                        <div class="stats-info">
-                            <span>${statsInfo}</span>
+                    ${(stockInfo || statsInfo) ? `
+                        <div class="offer-metrics">
+                            ${stockInfo ? `
+                                <div class="metric metric-stock" title="Current stock">
+                                    <span class="metric-icon metric-icon-stock">📦</span>
+                                    <span class="metric-label">Stock</span>
+                                    <span class="metric-value">${stockInfo.available}</span>
+                                    ${stockInfo.sold > 0 ? `<span class="metric-sub">(${stockInfo.sold} sold)</span>` : ''}
+                                </div>
+                            ` : ''}
+                            ${watchersCount > 0 ? `
+                                <div class="metric metric-watchers" title="People watching this offer">
+                                    <span class="metric-icon metric-icon-watchers">★</span>
+                                    <span class="metric-label">Watchers</span>
+                                    <span class="metric-value">${watchersCount}</span>
+                                </div>
+                            ` : ''}
+                            ${visitsCount > 0 ? `
+                                <div class="metric metric-visits" title="Listing visits">
+                                    <span class="metric-icon metric-icon-visits">👁</span>
+                                    <span class="metric-label">Visits</span>
+                                    <span class="metric-value">${visitsCount}</span>
+                                </div>
+                            ` : ''}
                         </div>
                     ` : ''}
                     ${!paymentInfo && !deliveryInfo && !stockInfo && !statsInfo ? '<div class="no-data-text">none yet</div>' : ''}
@@ -2600,11 +2630,18 @@ function loadImportedOffers() {
 
 // Clear search
 function clearSearch() {
-    document.getElementById('selectedCategory').value = '';
-    document.getElementById('offersList').innerHTML = '';
-    document.getElementById('resultsCount').textContent = '0';
-    document.getElementById('pagination').style.display = 'none';
-    document.getElementById('errorMessage').style.display = 'none';
+    const selectedCategorySelect = document.getElementById('selectedCategory');
+    if (selectedCategorySelect) {
+        selectedCategorySelect.value = '';
+    }
+    const offersListEl = document.getElementById('offersList');
+    const resultsCountEl = document.getElementById('resultsCount');
+    const paginationEl = document.getElementById('pagination');
+    const errorEl = document.getElementById('errorMessage');
+    if (offersListEl) offersListEl.innerHTML = '';
+    if (resultsCountEl) resultsCountEl.textContent = '0';
+    if (paginationEl) paginationEl.style.display = 'none';
+    if (errorEl) errorEl.style.display = 'none';
     
     // Clear visual selection - select "All Categories"
     document.querySelectorAll('.category-item').forEach(item => {
@@ -2614,6 +2651,21 @@ function clearSearch() {
             item.classList.remove('selected');
         }
     });
+
+    // Reset category search text and dropdown
+    const categorySearchInputEl = document.getElementById('categorySearchInput');
+    const categoryDropdownEl = document.getElementById('categoryDropdown');
+    if (categorySearchInputEl) {
+        categorySearchInputEl.value = '';
+    }
+    if (categoryDropdownEl) {
+        categoryDropdownEl.value = '';
+    }
+
+    // Uncheck any selected offer checkboxes
+    document.querySelectorAll('.offer-checkbox').forEach(cb => {
+        cb.checked = false;
+    });
     
     // Enable product count (can still load offers without category)
     const limitSelect = document.getElementById('limit');
@@ -2621,7 +2673,7 @@ function clearSearch() {
         limitSelect.disabled = false;
     }
     
-    // Clear all loaded offers
+    // Clear all loaded offers & pagination state
     allLoadedOffers = [];
     currentOffers = [];
     currentOffset = 0;
@@ -2773,6 +2825,8 @@ async function fetchCategoryName(categoryId) {
 // Display categories
 async function displayCategories(categories) {
     const categoriesListEl = document.getElementById('categoriesList');
+    const categoryDropdownEl = document.getElementById('categoryDropdown');
+    const categorySearchInputEl = document.getElementById('categorySearchInput');
     
     // Extract unique category IDs and names from loaded offers
     const categoriesFromOffers = new Map(); // Map<categoryId, {id, name, count}>
@@ -2868,7 +2922,18 @@ async function displayCategories(categories) {
         return;
     }
     
-    // Render "All Categories" option first
+    // Helper: apply search filter text (client-side, no extra requests)
+    let searchText = '';
+    if (categorySearchInputEl) {
+        searchText = categorySearchInputEl.value.trim().toLowerCase();
+    }
+    if (searchText) {
+        categoriesToDisplay = categoriesToDisplay.filter(cat =>
+            (cat.name || '').toLowerCase().includes(searchText)
+        );
+    }
+
+    // Render "All Categories" option first in list
     const allCategoriesSelected = selectedCategoryId === null;
     let html = `
         <div class="category-item ${allCategoriesSelected ? 'selected' : ''}" data-category-id="all">
@@ -2876,7 +2941,7 @@ async function displayCategories(categories) {
         </div>
     `;
     
-    // Render categories
+    // Render categories in sidebar list
     html += categoriesToDisplay.map(category => {
         const isSelected = selectedCategoryId === category.id;
         return `
@@ -2888,7 +2953,21 @@ async function displayCategories(categories) {
     
     categoriesListEl.innerHTML = html;
     
-    // Add click listeners
+    // Keep dropdown in sync with visible categories
+    if (categoryDropdownEl) {
+        // Rebuild dropdown options once based on filtered categories
+        categoryDropdownEl.innerHTML = '<option value="">All categories</option>';
+        categoriesToDisplay.forEach(category => {
+            const opt = document.createElement('option');
+            opt.value = category.id;
+            opt.textContent = category.name || `Category ${category.id}`;
+            categoryDropdownEl.appendChild(opt);
+        });
+        // Restore current selection
+        categoryDropdownEl.value = selectedCategoryId || '';
+    }
+    
+    // Add click listeners for sidebar items
     document.querySelectorAll('.category-item').forEach(item => {
         item.addEventListener('click', () => {
             const categoryId = item.dataset.categoryId;
@@ -2899,6 +2978,24 @@ async function displayCategories(categories) {
             }
         });
     });
+
+    // Wire up search box once
+    if (categorySearchInputEl && !categorySearchInputEl.dataset.bound) {
+        categorySearchInputEl.dataset.bound = 'true';
+        categorySearchInputEl.addEventListener('input', () => {
+            // Re-render using same base categories but with new filter text
+            displayCategories(categories);
+        });
+    }
+
+    // Wire up dropdown once
+    if (categoryDropdownEl && !categoryDropdownEl.dataset.bound) {
+        categoryDropdownEl.dataset.bound = 'true';
+        categoryDropdownEl.addEventListener('change', e => {
+            const value = e.target.value || null;
+            selectCategory(value);
+        });
+    }
 }
 
 // Select a category

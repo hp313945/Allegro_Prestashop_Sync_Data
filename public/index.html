@@ -96,10 +96,21 @@
 
             <!-- Main Content Wrapper -->
             <div class="main-content-wrapper">
-                <!-- Left Sidebar - Categories -->
+                <!-- Left Sidebar - Categories (compact with search & dropdown) -->
                 <aside class="sidebar">
                     <div class="sidebar-header">
                         <h2>Allegro Categories</h2>
+                        <div class="sidebar-header-sub">
+                            <input 
+                                type="text" 
+                                id="categorySearchInput" 
+                                class="category-search-input" 
+                                placeholder="Search category..."
+                                autocomplete="off">
+                            <select id="categoryDropdown" class="category-dropdown">
+                                <option value="">All categories</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="categories-list" id="categoriesList"></div>
                 </aside>
@@ -120,7 +131,7 @@
                                     </select>
                                 </div>
                                 <button id="loadOffersBtn" class="btn btn-primary" disabled>Load Offers</button>
-                                <button id="clearBtn" class="btn btn-secondary">Clear</button>
+                                <button id="clearBtn" class="btn btn-secondary" onclick="clearSearch()">Clear</button>
                                 <button id="importSelectedBtn" class="btn btn-success" disabled>Import Selected</button>
                                 <button id="importAllBtn" class="btn btn-success" disabled>Import All</button>
                             </div>
