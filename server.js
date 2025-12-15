@@ -446,7 +446,102 @@ async function getUserAccessToken() {
 }
 
 /**
+ * Simple XML escape helper
+ */
+function xmlEscape(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * Build PrestaShop XML for a localized field array
+ * Example input:
+ *   [{ id: 1, value: 'Name PL' }, { id: 2, value: 'Name EN' }]
+ * Output:
+ *   <tagName><language id="1">Name PL</language>...</tagName>
+ */
+function buildLocalizedFieldXml(tagName, items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return '';
+  }
+  const languagesXml = items
+    .map(lang => `<language id="${xmlEscape(lang.id)}">${xmlEscape(lang.value)}</language>`)
+    .join('');
+  return `<${tagName}>${languagesXml}</${tagName}>`;
+}
+
+/**
+ * Build XML body for a PrestaShop product
+ */
+function buildProductXml(product) {
+  const nameXml = buildLocalizedFieldXml('name', product.name);
+  const descriptionXml = buildLocalizedFieldXml('description', product.description);
+  const shortDescXml = buildLocalizedFieldXml('description_short', product.description_short);
+
+  const categoriesXml = product.associations && product.associations.categories
+    ? `<associations><categories>${product.associations.categories.category
+        .map(cat => `<category><id>${xmlEscape(cat.id)}</id></category>`)
+        .join('')}</categories></associations>`
+    : '';
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <product>
+    <id_shop_default>${xmlEscape(product.id_shop_default)}</id_shop_default>
+    <id_category_default>${xmlEscape(product.id_category_default)}</id_category_default>
+    <reference>${xmlEscape(product.reference)}</reference>
+    ${nameXml}
+    ${descriptionXml}
+    ${shortDescXml}
+    <price>${xmlEscape(product.price)}</price>
+    <active>${xmlEscape(product.active)}</active>
+    ${categoriesXml}
+  </product>
+</prestashop>`;
+}
+
+/**
+ * Build XML body for a PrestaShop category
+ */
+function buildCategoryXml(category) {
+  const nameXml = buildLocalizedFieldXml('name', category.name);
+  const linkRewriteXml = buildLocalizedFieldXml('link_rewrite', category.link_rewrite);
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <category>
+    ${nameXml}
+    <id_parent>${xmlEscape(category.id_parent)}</id_parent>
+    <active>${xmlEscape(category.active)}</active>
+    ${linkRewriteXml}
+  </category>
+</prestashop>`;
+}
+
+/**
+ * Build XML body for a PrestaShop stock_available resource
+ */
+function buildStockAvailableXml(stockAvailable) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <stock_available>
+    <id>${xmlEscape(stockAvailable.id || '')}</id>
+    <id_product>${xmlEscape(stockAvailable.id_product)}</id_product>
+    <quantity>${xmlEscape(stockAvailable.quantity)}</quantity>
+  </stock_available>
+</prestashop>`;
+}
+
+/**
  * Make authenticated request to PrestaShop API
+ *
+ * If "data" is a string, it is sent as raw XML body.
+ * If "data" is an object, it is sent as JSON.
  */
 async function prestashopApiRequest(endpoint, method = 'GET', data = null) {
   try {
@@ -478,15 +573,23 @@ async function prestashopApiRequest(endpoint, method = 'GET', data = null) {
     // Format: Basic base64(api_key:)
     const auth = Buffer.from(`${prestashopCredentials.apiKey}:`).toString('base64');
     
+    const headers = {
+      'Authorization': `Basic ${auth}`,
+      'Output-Format': 'JSON',
+      'Accept': 'application/json'
+    };
+
+    // Default to JSON; if data is a string we treat it as XML
+    if (typeof data === 'string') {
+      headers['Content-Type'] = 'text/xml; charset=UTF-8';
+    } else {
+      headers['Content-Type'] = 'application/json';
+    }
+
     const config = {
       method: method,
       url: jsonUrl,
-      headers: {
-        'Authorization': `Basic ${auth}`,
-        'Content-Type': 'application/json',
-        'Output-Format': 'JSON',
-        'Accept': 'application/json'
-      },
+      headers,
       timeout: 15000, // 15 second timeout
       validateStatus: function (status) {
         // Don't throw error for 4xx/5xx, let us handle it
@@ -1484,23 +1587,21 @@ app.post('/api/prestashop/categories', async (req, res) => {
       });
     }
 
-    // PrestaShop requires XML format for creation, but we'll use JSON
     const categoryData = {
-      category: {
-        name: [
-          { id: 1, value: name }, // Polish (id: 1)
-          { id: 2, value: name }  // English (id: 2)
-        ],
-        id_parent: idParent,
-        active: active,
-        link_rewrite: [
-          { id: 1, value: name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') },
-          { id: 2, value: name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') }
-        ]
-      }
+      name: [
+        { id: 1, value: name }, // Polish (id: 1)
+        { id: 2, value: name }  // English (id: 2)
+      ],
+      id_parent: idParent,
+      active: active,
+      link_rewrite: [
+        { id: 1, value: name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') },
+        { id: 2, value: name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') }
+      ]
     };
 
-    const data = await prestashopApiRequest('categories', 'POST', categoryData);
+    const xmlBody = buildCategoryXml(categoryData);
+    const data = await prestashopApiRequest('categories', 'POST', xmlBody);
     
     res.json({
       success: true,
@@ -1541,16 +1642,19 @@ app.post('/api/prestashop/products', async (req, res) => {
     if (!categoryId && autoCreateCategory && offer.category) {
       const categoryName = offer.category.name || 'Imported Category';
       try {
-        const categoryRes = await prestashopApiRequest('categories', 'POST', {
-          category: {
-            name: [
-              { id: 1, value: categoryName },
-              { id: 2, value: categoryName }
-            ],
-            id_parent: 2,
-            active: 1
-          }
-        });
+      const categoryXml = buildCategoryXml({
+        name: [
+          { id: 1, value: categoryName },
+          { id: 2, value: categoryName }
+        ],
+        id_parent: 2,
+        active: 1,
+        link_rewrite: [
+          { id: 1, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') },
+          { id: 2, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') }
+        ]
+      });
+      const categoryRes = await prestashopApiRequest('categories', 'POST', categoryXml);
         finalCategoryId = categoryRes.category?.id || categoryRes.id || 2;
       } catch (error) {
         console.error('Failed to create category:', error.message);
@@ -1559,35 +1663,34 @@ app.post('/api/prestashop/products', async (req, res) => {
     }
 
     // Build product data for PrestaShop
-    const productData = {
-      product: {
-        id_shop_default: 1,
-        id_category_default: finalCategoryId,
-        reference: offer.id.toString(),
-        name: [
-          { id: 1, value: offer.name }, // Polish
-          { id: 2, value: offer.name }  // English
-        ],
-        description: [
-          { id: 1, value: description },
-          { id: 2, value: description }
-        ],
-        description_short: [
-          { id: 1, value: description.substring(0, 800) },
-          { id: 2, value: description.substring(0, 800) }
-        ],
-        price: parseFloat(price),
-        active: 1,
-        associations: {
-          categories: {
-            category: [{ id: finalCategoryId }]
-          }
-        }
+  const productData = {
+    id_shop_default: 1,
+    id_category_default: finalCategoryId,
+    reference: offer.id.toString(),
+    name: [
+      { id: 1, value: offer.name }, // Polish
+      { id: 2, value: offer.name }  // English
+    ],
+    description: [
+      { id: 1, value: description },
+      { id: 2, value: description }
+    ],
+    description_short: [
+      { id: 1, value: description.substring(0, 800) },
+      { id: 2, value: description.substring(0, 800) }
+    ],
+    price: parseFloat(price),
+    active: 1,
+    associations: {
+      categories: {
+        category: [{ id: finalCategoryId }]
       }
-    };
+    }
+  };
 
-    // Create product
-    const productResponse = await prestashopApiRequest('products', 'POST', productData);
+  // Create product (send XML body)
+  const productXml = buildProductXml(productData);
+  const productResponse = await prestashopApiRequest('products', 'POST', productXml);
     // PrestaShop returns: { product: { id: ... } } or { id: ... }
     let prestashopProductId = null;
     if (productResponse.product) {
@@ -1619,12 +1722,12 @@ app.post('/api/prestashop/products', async (req, res) => {
       }
       
       if (stockAvailableId) {
-        await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', {
-          stock_available: {
-            quantity: parseInt(stock),
-            id_product: prestashopProductId
-          }
+        const stockXml = buildStockAvailableXml({
+          id: stockAvailableId,
+          quantity: parseInt(stock),
+          id_product: prestashopProductId
         });
+        await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', stockXml);
       }
     } catch (stockError) {
       console.error('Failed to update stock:', stockError.message);
@@ -1703,12 +1806,12 @@ app.put('/api/prestashop/products/:productId/stock', async (req, res) => {
       });
     }
 
-    await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', {
-      stock_available: {
-        quantity: parseInt(quantity),
-        id_product: parseInt(productId)
-      }
+    const stockXml = buildStockAvailableXml({
+      id: stockAvailableId,
+      quantity: parseInt(quantity),
+      id_product: parseInt(productId)
     });
+    await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', stockXml);
 
     res.json({
       success: true,
@@ -1776,12 +1879,12 @@ app.post('/api/prestashop/sync/stock', async (req, res) => {
       });
     }
 
-    await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', {
-      stock_available: {
-        quantity: parseInt(quantity),
-        id_product: mapping.prestashopProductId
-      }
+    const stockXml = buildStockAvailableXml({
+      id: stockAvailableId,
+      quantity: parseInt(quantity),
+      id_product: mapping.prestashopProductId
     });
+    await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', stockXml);
 
     // Update mapping sync time
     mapping.lastStockSync = new Date().toISOString();
