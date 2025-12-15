@@ -2691,11 +2691,13 @@ async function loadCategoriesFromOffers() {
     const categoriesListEl = document.getElementById('categoriesList');
     if (!categoriesListEl) return;
     
-    categoriesListEl.innerHTML = '<div style="text-align: center; padding: 40px; color: #1a73e8;">Loading categories from your offers...</div>';
+    // Show a short, friendly loading message
+    categoriesListEl.innerHTML = '<div style="text-align: center; padding: 20px; color: #1a73e8; font-size: 0.9em;">Loading categories from your offers...</div>';
     
     try {
-        // Fetch user's offers to extract categories
-        const response = await fetch(`${API_BASE}/api/offers?offset=0&limit=1000`);
+        // Fetch a limited set of user's offers to extract categories
+        // Smaller limit keeps loading time short while still covering most used categories
+        const response = await fetch(`${API_BASE}/api/offers?offset=0&limit=300`);
         
         if (!response.ok && response.status === 401) {
             throw new Error('Invalid credentials. Please check your Client ID and Client Secret.');
@@ -2749,20 +2751,20 @@ async function loadCategoriesFromOffers() {
             // Convert map to array and fetch category names if needed
             const categoriesArray = Array.from(categoriesFromOffers.values());
             
-            // Fetch category names for categories without names
-            for (const cat of categoriesArray) {
+            // Fetch category names for categories without names, in parallel for speed
+            await Promise.all(categoriesArray.map(async (cat) => {
                 if (cat.name === `Category ${cat.id}` || !cat.name) {
                     try {
                         const catName = await fetchCategoryName(cat.id);
                         if (catName && catName !== 'N/A') {
                             cat.name = catName;
                             categoryNameCache[cat.id] = catName;
-        }
-    } catch (error) {
+                        }
+                    } catch (error) {
                         console.log(`Failed to fetch category name for ${cat.id}:`, error);
                     }
                 }
-            }
+            }));
             
             // Store categories
             allCategories = categoriesArray;
