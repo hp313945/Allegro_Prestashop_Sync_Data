@@ -43,6 +43,43 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateButtonStates();
 });
 
+// Automatically load offers when everything is already configured
+async function autoLoadOffersIfReady() {
+    const loadOffersBtn = document.getElementById('loadOffersBtn');
+    if (!loadOffersBtn) return;
+
+    // Require Allegro auth + OAuth + PrestaShop authorization
+    if (!isAuthenticated || !isOAuthConnected || !prestashopAuthorized) {
+        return;
+    }
+
+    // If offers are already loaded, don't reload
+    if (allLoadedOffers && allLoadedOffers.length > 0) {
+        return;
+    }
+
+    const limitSelect = document.getElementById('limit');
+    const limit = limitSelect ? parseInt(limitSelect.value, 10) || 20 : 20;
+
+    currentLimit = limit;
+    currentOffset = 0;
+    currentPageNumber = 1;
+    totalProductsSeen = 0;
+    allLoadedOffers = [];
+
+    // Ensure categories are loaded (short and in background)
+    if (allCategories.length === 0) {
+        try {
+            await loadCategoriesFromOffers();
+        } catch (error) {
+            console.warn('Auto categories load failed, continuing with offers:', error);
+        }
+    }
+
+    // Start loading offers (progressive rendering handled inside)
+    fetchAllOffers();
+}
+
 // Load saved credentials and restore authentication state
 async function loadSavedCredentials() {
     const savedClientId = localStorage.getItem('allegro_clientId');
@@ -798,6 +835,9 @@ async function checkOAuthStatus() {
         
         // Update UI state to refresh Load Offers button and other controls
         updateUIState(true);
+
+        // If everything is configured on this device, auto-load offers after refresh
+        await autoLoadOffersIfReady();
     } catch (error) {
         console.error('Error checking OAuth status:', error);
         const oauthStatusEl = document.getElementById('oauthStatus');
@@ -1806,32 +1846,6 @@ function createOfferCard(product) {
                         ${statusBadge}
                     </div>
                 ` : ''}
-                ${(stockInfo || statsInfo) ? `
-                    <div class="offer-metrics offer-metrics-overlay">
-                        ${stockInfo ? `
-                            <div class="metric metric-stock" title="Current stock">
-                                <span class="metric-icon metric-icon-stock">📦</span>
-                                <span class="metric-label">Stock</span>
-                                <span class="metric-value">${stockInfo.available}</span>
-                                ${stockInfo.sold > 0 ? `<span class="metric-sub">(${stockInfo.sold} sold)</span>` : ''}
-                            </div>
-                        ` : ''}
-                        ${watchersCount > 0 ? `
-                            <div class="metric metric-watchers" title="People watching this offer">
-                                <span class="metric-icon metric-icon-watchers">★</span>
-                                <span class="metric-label">Watchers</span>
-                                <span class="metric-value">${watchersCount}</span>
-                            </div>
-                        ` : ''}
-                        ${visitsCount > 0 ? `
-                            <div class="metric metric-visits" title="Listing visits">
-                                <span class="metric-icon metric-icon-visits">👁</span>
-                                <span class="metric-label">Visits</span>
-                                <span class="metric-value">${visitsCount}</span>
-                            </div>
-                        ` : ''}
-                    </div>
-                ` : ''}
             </div>
             <div class="offer-content">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
@@ -1904,6 +1918,33 @@ function createOfferCard(product) {
                         <span class="info-value category-id">${escapeHtml(categoryName)}</span>
                     </div>
                 </div>
+
+                ${(stockInfo || statsInfo) ? `
+                    <div class="offer-metrics offer-metrics-bottom">
+                        ${stockInfo ? `
+                            <div class="metric metric-stock" title="Current stock">
+                                <span class="metric-icon metric-icon-stock">📦</span>
+                                <span class="metric-label">Stock</span>
+                                <span class="metric-value">${stockInfo.available}</span>
+                                ${stockInfo.sold > 0 ? `<span class="metric-sub">(${stockInfo.sold} sold)</span>` : ''}
+                            </div>
+                        ` : ''}
+                        ${watchersCount > 0 ? `
+                            <div class="metric metric-watchers" title="People watching this offer">
+                                <span class="metric-icon metric-icon-watchers">★</span>
+                                <span class="metric-label">Watchers</span>
+                                <span class="metric-value">${watchersCount}</span>
+                            </div>
+                        ` : ''}
+                        ${visitsCount > 0 ? `
+                            <div class="metric metric-visits" title="Listing visits">
+                                <span class="metric-icon metric-icon-visits">👁</span>
+                                <span class="metric-label">Visits</span>
+                                <span class="metric-value">${visitsCount}</span>
+                            </div>
+                        ` : ''}
+                    </div>
+                ` : ''}
             </div>
         </div>
     `;
@@ -2505,6 +2546,9 @@ async function checkPrestashopStatus() {
         updateConfigStatuses();
         updateExportButtonState();
         updateUIState(true); // Update UI state to reflect PrestaShop authorization status
+
+        // If everything is configured on this device, auto-load offers after refresh
+        await autoLoadOffersIfReady();
     } catch (error) {
         console.error('Error checking PrestaShop status:', error);
         prestashopAuthorized = false;

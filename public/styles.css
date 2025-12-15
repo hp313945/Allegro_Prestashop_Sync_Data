@@ -968,7 +968,7 @@ body {
     overflow: visible;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
     min-height: 100px;
-    align-items: flex-start;
+    align-items: stretch;
 }
 
 .offer-card:hover {
@@ -996,7 +996,7 @@ body {
     position: relative;
     flex-shrink: 0;
     border-right: 1px solid #f0f0f0;
-    align-self: flex-start;
+    align-self: stretch;
 }
 
 .offer-image {
@@ -1237,13 +1237,20 @@ body {
 }
 
 .offer-metrics-overlay {
-    position: absolute;
-    left: 3px;
-    right: 3px;
-    bottom: 3px;
-    justify-content: center;
-    padding: 2px 4px;
-    background: linear-gradient(to top, rgba(255,255,255,0.95), rgba(255,255,255,0.85));
+    position: static;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    justify-content: flex-start;
+    padding: 0;
+    background: none;
+}
+
+/* Metrics at bottom of whole product card */
+.offer-metrics-bottom {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid #f0f0f0;
 }
 
 /* Status badge on top of image (ACTIVE / ENDED / INACTIVE) */
