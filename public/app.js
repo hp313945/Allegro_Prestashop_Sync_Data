@@ -1481,6 +1481,24 @@ async function displayOffersPage() {
         checkbox.addEventListener('change', updateImportButtons);
     });
     
+    // Make clicking on the product card toggle its checkbox (if present)
+    document.querySelectorAll('.offer-card').forEach(card => {
+        card.addEventListener('click', (event) => {
+            // Don't handle clicks directly on checkboxes or other interactive controls
+            if (event.target.closest('.offer-checkbox') || event.target.closest('button') || event.target.closest('a')) {
+                return;
+            }
+            
+            const checkbox = card.querySelector('.offer-checkbox');
+            if (!checkbox) {
+                return;
+            }
+            
+            checkbox.checked = !checkbox.checked;
+            updateImportButtons();
+        });
+    });
+    
     // Fetch full product details for products without images
     // This is done asynchronously to not block the UI
     const productsWithoutImages = pageOffers.filter(p => {
@@ -1854,7 +1872,7 @@ function createOfferCard(product) {
                         </div>
                     `}
                 </div>
-                ${(watchersCount > 0 || visitsCount > 0) ? `
+                ${(watchersCount > 0 || visitsCount > 0 || stockInfo) ? `
                     <div class="offer-metrics offer-metrics-left">
                         ${watchersCount > 0 ? `
                             <div class="metric metric-watchers" title="People watching this offer">
@@ -1868,6 +1886,14 @@ function createOfferCard(product) {
                                 <span class="metric-icon metric-icon-visits">👁</span>
                                 <span class="metric-label">Visits</span>
                                 <span class="metric-value">${visitsCount}</span>
+                            </div>
+                        ` : ''}
+                        ${stockInfo ? `
+                            <div class="metric metric-stock" title="Current stock">
+                                <span class="metric-icon metric-icon-stock">📦</span>
+                                <span class="metric-label">Stock</span>
+                                <span class="metric-value">${stockInfo.available}</span>
+                                ${stockInfo.sold > 0 ? `<span class="metric-sub">(${stockInfo.sold} sold)</span>` : ''}
                             </div>
                         ` : ''}
                     </div>
@@ -1944,17 +1970,6 @@ function createOfferCard(product) {
                         <span class="info-value category-id">${escapeHtml(categoryName)}</span>
                     </div>
                 </div>
-
-                ${stockInfo ? `
-                    <div class="offer-metrics offer-metrics-bottom">
-                        <div class="metric metric-stock" title="Current stock">
-                            <span class="metric-icon metric-icon-stock">📦</span>
-                            <span class="metric-label">Stock</span>
-                            <span class="metric-value">${stockInfo.available}</span>
-                            ${stockInfo.sold > 0 ? `<span class="metric-sub">(${stockInfo.sold} sold)</span>` : ''}
-                        </div>
-                    </div>
-                ` : ''}
             </div>
         </div>
     `;
