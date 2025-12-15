@@ -26,18 +26,104 @@ let prestashopAuthorized = false; // Track if PrestaShop connection is successfu
 const API_BASE = '';
 
 // Initialize app
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Show main interface immediately - no modal
     showMainInterface();
     setupEventListeners();
     loadImportedOffers();
     loadPrestashopConfig();
     checkPrestashopStatus();
+    
+    // Load saved credentials and restore authentication state
+    await loadSavedCredentials();
+    
     // Initially disable all actions until authenticated
     updateUIState(false);
     // Update button states on initialization
     updateButtonStates();
 });
+
+// Load saved credentials and restore authentication state
+async function loadSavedCredentials() {
+    const savedClientId = localStorage.getItem('allegro_clientId');
+    const savedClientSecret = localStorage.getItem('allegro_clientSecret');
+    
+    if (savedClientId && savedClientSecret) {
+        // Restore credentials to input fields
+        const clientIdInput = document.getElementById('clientId');
+        const clientSecretInput = document.getElementById('clientSecret');
+        
+        if (clientIdInput) {
+            clientIdInput.value = savedClientId;
+        }
+        if (clientSecretInput) {
+            clientSecretInput.value = savedClientSecret;
+        }
+        
+        // Send credentials to backend to ensure they're loaded
+        try {
+            const credentialsResponse = await fetch(`${API_BASE}/api/credentials`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    clientId: savedClientId,
+                    clientSecret: savedClientSecret
+                })
+            });
+            
+            const credentialsData = await credentialsResponse.json();
+            
+            if (!credentialsData.success) {
+                // Credentials failed to save - clear them
+                localStorage.removeItem('allegro_clientId');
+                localStorage.removeItem('allegro_clientSecret');
+                if (clientIdInput) clientIdInput.value = '';
+                if (clientSecretInput) clientSecretInput.value = '';
+                return;
+            }
+            
+            // Check if credentials are still valid by testing authentication
+            const authResponse = await fetch(`${API_BASE}/api/test-auth`);
+            const authData = await authResponse.json();
+            
+            if (authData.success) {
+                // Credentials are valid - restore authentication state
+                isAuthenticated = true;
+                const authStatusEl = document.getElementById('authStatus');
+                if (authStatusEl) {
+                    authStatusEl.textContent = 'Authenticated';
+                    authStatusEl.className = 'status-value success';
+                }
+                
+                // Show disconnect button
+                const clearBtn = document.getElementById('clearCredentialsBtn');
+                if (clearBtn) {
+                    clearBtn.style.display = 'block';
+                }
+                
+                // Update config status indicators and button states
+                updateConfigStatuses();
+                
+                // Check OAuth status (this will also try to refresh expired tokens)
+                await checkOAuthStatus();
+                
+                // Update UI state
+                updateUIState(true);
+            } else {
+                // Credentials are invalid - clear them
+                localStorage.removeItem('allegro_clientId');
+                localStorage.removeItem('allegro_clientSecret');
+                if (clientIdInput) clientIdInput.value = '';
+                if (clientSecretInput) clientSecretInput.value = '';
+            }
+        } catch (error) {
+            console.error('Error checking saved credentials:', error);
+            // On error, don't restore state - user will need to reconnect
+        }
+    }
+}
 
 // Update config status indicators
 function updateConfigStatuses() {
@@ -482,6 +568,12 @@ async function clearCredentials() {
     isOAuthConnected = false;
     updateUIState(false);
     
+    // Hide OAuth info
+    const oauthInfoEl = document.getElementById('oauthInfo');
+    if (oauthInfoEl) {
+        oauthInfoEl.style.display = 'none';
+    }
+    
     // Update config status indicators to show "Not Configured" and update button states
     updateConfigStatuses();
     
@@ -494,6 +586,9 @@ async function clearCredentials() {
     if (authorizeBtn) {
         authorizeBtn.style.display = 'none';
     }
+    
+    // Check OAuth status to update UI
+    await checkOAuthStatus();
     
 }
 
@@ -657,6 +752,7 @@ async function checkOAuthStatus() {
         
         const oauthStatusEl = document.getElementById('oauthStatus');
         const authorizeBtn = document.getElementById('authorizeAccountBtn');
+        const oauthInfoEl = document.getElementById('oauthInfo');
         
         isOAuthConnected = data.connected || false;
         
@@ -670,14 +766,38 @@ async function checkOAuthStatus() {
             }
         }
         
-        // Show/hide authorize button based on authentication and OAuth status
-        if (authorizeBtn && isAuthenticated) {
-            if (isOAuthConnected) {
-                authorizeBtn.style.display = 'none';
+        // Display OAuth info if available
+        if (oauthInfoEl) {
+            if (isOAuthConnected && data.userId) {
+                const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
+                const expiresText = expiresAt ? ` (expires: ${expiresAt.toLocaleString()})` : '';
+                oauthInfoEl.innerHTML = `
+                    <div style="margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px; font-size: 12px;">
+                        <strong>OAuth Info:</strong><br>
+                        User ID: ${data.userId || 'N/A'}${expiresText}
+                    </div>
+                `;
+                oauthInfoEl.style.display = 'block';
             } else {
-                authorizeBtn.style.display = 'block';
+                oauthInfoEl.style.display = 'none';
             }
         }
+        
+        // Show/hide authorize button based on authentication and OAuth status
+        if (authorizeBtn) {
+            if (isAuthenticated) {
+                if (isOAuthConnected) {
+                    authorizeBtn.style.display = 'none';
+                } else {
+                    authorizeBtn.style.display = 'block';
+                }
+            } else {
+                authorizeBtn.style.display = 'none';
+            }
+        }
+        
+        // Update UI state to refresh Load Offers button and other controls
+        updateUIState(true);
     } catch (error) {
         console.error('Error checking OAuth status:', error);
         const oauthStatusEl = document.getElementById('oauthStatus');
@@ -685,6 +805,12 @@ async function checkOAuthStatus() {
             oauthStatusEl.textContent = 'Error';
             oauthStatusEl.className = 'status-value error';
         }
+        const oauthInfoEl = document.getElementById('oauthInfo');
+        if (oauthInfoEl) {
+            oauthInfoEl.style.display = 'none';
+        }
+        // Update UI state even on error
+        updateUIState(true);
     }
 }
 

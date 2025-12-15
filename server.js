@@ -855,15 +855,38 @@ app.get('/api/oauth/callback', async (req, res) => {
 
 /**
  * Check OAuth connection status
+ * Attempts to refresh token if expired but refresh token exists
  */
-app.get('/api/oauth/status', (req, res) => {
-  const isConnected = !!(userOAuthTokens.accessToken && userOAuthTokens.expiresAt && Date.now() < userOAuthTokens.expiresAt);
-  
-  res.json({
-    connected: isConnected,
-    userId: userOAuthTokens.userId,
-    expiresAt: userOAuthTokens.expiresAt
-  });
+app.get('/api/oauth/status', async (req, res) => {
+  try {
+    // Check if token is still valid
+    let isConnected = !!(userOAuthTokens.accessToken && userOAuthTokens.expiresAt && Date.now() < userOAuthTokens.expiresAt);
+    
+    // If token is expired but we have a refresh token, try to refresh
+    if (!isConnected && userOAuthTokens.refreshToken && userCredentials.clientId && userCredentials.clientSecret) {
+      try {
+        await getUserAccessToken(); // This will refresh the token if needed
+        isConnected = !!(userOAuthTokens.accessToken && userOAuthTokens.expiresAt && Date.now() < userOAuthTokens.expiresAt);
+      } catch (refreshError) {
+        // Refresh failed - token is not connected
+        console.log('Token refresh failed in status check:', refreshError.message);
+        isConnected = false;
+      }
+    }
+    
+    res.json({
+      connected: isConnected,
+      userId: userOAuthTokens.userId,
+      expiresAt: userOAuthTokens.expiresAt
+    });
+  } catch (error) {
+    console.error('Error checking OAuth status:', error);
+    res.json({
+      connected: false,
+      userId: null,
+      expiresAt: null
+    });
+  }
 });
 
 /**
