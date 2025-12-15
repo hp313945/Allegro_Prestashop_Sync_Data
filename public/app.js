@@ -3,7 +3,7 @@ let currentOffers = [];
 let allLoadedOffers = []; // Store all loaded offers for filtering
 let importedOffers = [];
 let currentOffset = 0; // Kept for display purposes
-let currentLimit = 20;
+let currentLimit = 30; // Default products per page
 let totalCount = 0; // Current page product count
 let totalProductsSeen = 0; // Total products seen across all pages in current category
 let isAuthenticated = false;
@@ -16,6 +16,7 @@ let currentNextPage = null; // For cursor-based pagination
 let pageHistory = []; // Track page history for going back
 let currentPhrase = ''; // Track current search phrase
 let currentPageNumber = 1; // Track current page number
+let currentStatusFilter = 'ALL'; // ALL | ACTIVE | ENDED
 
 // PrestaShop state
 let prestashopCategories = [];
@@ -41,6 +42,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateUIState(false);
     // Update button states on initialization
     updateButtonStates();
+
+    // Try to restore previously saved offers and categories from localStorage
+    loadOffersAndCategoriesFromStorage();
 });
 
 // Automatically load offers when everything is already configured
@@ -58,9 +62,8 @@ async function autoLoadOffersIfReady() {
         return;
     }
 
-    const limitSelect = document.getElementById('limit');
-    const limit = limitSelect ? parseInt(limitSelect.value, 10) || 20 : 20;
-
+    // Fixed page size: always 30 offers per page
+    const limit = 30;
     currentLimit = limit;
     currentOffset = 0;
     currentPageNumber = 1;
@@ -304,7 +307,8 @@ function setupEventListeners() {
     const loadOffersBtn = document.getElementById('loadOffersBtn');
     if (loadOffersBtn) {
         loadOffersBtn.addEventListener('click', async () => {
-            const limit = parseInt(document.getElementById('limit').value);
+            // Fixed page size: always 30 offers per page
+            const limit = 30;
             currentLimit = limit;
             currentOffset = 0;
             currentPageNumber = 1;
@@ -325,11 +329,21 @@ function setupEventListeners() {
         });
     }
     
-    // Add event listener for product count change
-    const limitSelect = document.getElementById('limit');
-    if (limitSelect) {
-        limitSelect.addEventListener('change', handleProductCountChange);
+    // Status filter (All / Active / Ended)
+    const statusFilterSelect = document.getElementById('statusFilter');
+    if (statusFilterSelect) {
+        statusFilterSelect.addEventListener('change', () => {
+            currentStatusFilter = statusFilterSelect.value || 'ALL';
+            // Reset pagination when status filter changes
+            currentOffset = 0;
+            currentPageNumber = 1;
+            pageHistory = [];
+            totalProductsSeen = 0;
+            displayOffersPage();
+        });
     }
+    
+    // Product count is fixed (30 per page), so no selector or change handler needed
     document.getElementById('importSelectedBtn').addEventListener('click', importSelected);
     document.getElementById('importAllBtn').addEventListener('click', importAll);
     document.getElementById('prevBtn').addEventListener('click', () => changePage(-1));
@@ -708,7 +722,6 @@ function validateAuth() {
 function updateUIState(configured) {
     const importSelectedBtn = document.getElementById('importSelectedBtn');
     const importAllBtn = document.getElementById('importAllBtn');
-    const limitSelect = document.getElementById('limit');
     const selectedCategorySelect = document.getElementById('selectedCategory');
     
     // Disable all actions and inputs if not authenticated
@@ -717,11 +730,6 @@ function updateUIState(configured) {
     
     if (authRequiredMessage) {
         authRequiredMessage.style.display = authenticated ? 'none' : 'block';
-    }
-    
-    // Enable product count based on authentication (no longer requires category)
-    if (limitSelect) {
-        limitSelect.disabled = !authenticated;
     }
     
     const loadCategoriesBtn = document.getElementById('loadCategoriesBtn');
@@ -990,28 +998,11 @@ async function testAuthentication() {
     }
 }
 
-// Handle product count change - automatically fetch offers if already loaded
+// Handle product count change
+// Product count is now fixed to 30 per page and the UI selector was removed,
+// so this function is kept as a no-op for backward compatibility.
 async function handleProductCountChange() {
-    // Validate authentication first
-    if (!validateAuth()) {
-        return;
-    }
-    
-    const limitSelect = document.getElementById('limit');
-    const limit = parseInt(limitSelect.value);
-    
-    // Only update if we already have offers loaded (user has clicked "Load My Offers")
-    if (allLoadedOffers.length > 0 || currentOffers.length > 0 || currentPageNumber > 1) {
-        // Reset pagination state for new limit
-        currentOffset = 0;
-        currentLimit = limit;
-        pageHistory = [];
-        currentPageNumber = 1; // Reset to first page
-        totalProductsSeen = 0; // Reset total products seen
-        
-        // Just update the display with new limit (no need to re-fetch)
-        displayOffersPage();
-    }
+    return;
 }
 
 // Fetch all offers from API (loads all pages)
@@ -1078,22 +1069,9 @@ async function fetchAllOffers() {
                     allLoadedOffers = allOffers;
                     totalCount = totalCountFromAPI || allOffers.length;
 
-                    // Apply category filter if selected
-                    if (selectedCategoryId !== null) {
-                        currentOffers = allOffers.filter(offer => {
-                            let offerCategoryId = null;
-                            if (offer.category) {
-                                if (typeof offer.category === 'string') {
-                                    offerCategoryId = offer.category;
-                                } else if (offer.category.id) {
-                                    offerCategoryId = offer.category.id;
-                                }
-                            }
-                            return offerCategoryId && String(offerCategoryId) === String(selectedCategoryId);
-                        });
-                    } else {
-                        currentOffers = allOffers;
-                    }
+                    // By default, show all offers on first load (status and category filters
+                    // are applied in displayOffersPage / category handlers)
+                    currentOffers = allLoadedOffers;
 
                     // Reset pagination for the first visible page
                     currentOffset = 0;
@@ -1447,18 +1425,43 @@ async function displayOffers(offers) {
     }
 }
 
+// Get offers filtered by current status (ALL / ACTIVE / ENDED)
+function getOffersFilteredByStatus() {
+    if (!currentStatusFilter || currentStatusFilter === 'ALL') {
+        return currentOffers;
+    }
+    
+    return currentOffers.filter(offer => {
+        const status = offer?.publication?.status || null;
+        if (!status) {
+            // If there is no status, hide it when a specific filter is applied
+            return false;
+        }
+        if (currentStatusFilter === 'ACTIVE') {
+            return status === 'ACTIVE';
+        }
+        if (currentStatusFilter === 'ENDED') {
+            return status === 'ENDED';
+        }
+        return true;
+    });
+}
+
 // Display current page of offers
 async function displayOffersPage() {
     const offersListEl = document.getElementById('offersList');
     const resultsCountEl = document.getElementById('resultsCount');
     
-    // Get offers for current page
+    // Apply status filter to all currently loaded offers
+    const filteredOffers = getOffersFilteredByStatus();
+    
+    // Get offers for current page from filtered list
     const startIndex = currentOffset;
-    const endIndex = Math.min(startIndex + currentLimit, currentOffers.length);
-    const pageOffers = currentOffers.slice(startIndex, endIndex);
+    const endIndex = Math.min(startIndex + currentLimit, filteredOffers.length);
+    const pageOffers = filteredOffers.slice(startIndex, endIndex);
     
     // Update results count with total filtered count
-    resultsCountEl.textContent = currentOffers.length;
+    resultsCountEl.textContent = filteredOffers.length;
     
     if (pageOffers.length === 0) {
         if (selectedCategoryId !== null) {
@@ -1535,6 +1538,9 @@ async function fetchProductDetails(productId) {
                 }
             }
         }
+
+        // Persist offers and categories locally so they can be restored on refresh
+        saveOffersAndCategories();
     } catch (error) {
         console.error(`Error fetching product details for ${productId}:`, error);
     }
@@ -1963,7 +1969,10 @@ function updatePagination() {
     const nextBtn = document.getElementById('nextBtn');
     const pageJumpInput = document.getElementById('pageJumpInput');
     
-    if (currentOffers.length === 0 && currentPageNumber === 1) {
+    // Work with status-filtered offers for pagination
+    const filteredOffers = getOffersFilteredByStatus();
+    
+    if (filteredOffers.length === 0 && currentPageNumber === 1) {
         paginationEl.style.display = 'none';
         return;
     }
@@ -1972,8 +1981,8 @@ function updatePagination() {
     
     // Calculate max page number based on filtered offers
     let maxPage = 1;
-    if (currentOffers.length > 0 && currentLimit > 0) {
-        maxPage = Math.ceil(currentOffers.length / currentLimit);
+    if (filteredOffers.length > 0 && currentLimit > 0) {
+        maxPage = Math.ceil(filteredOffers.length / currentLimit);
     }
     
     // Update page jump input
@@ -1985,11 +1994,11 @@ function updatePagination() {
     
     // Calculate current page offers count
     const startIndex = currentOffset;
-    const endIndex = Math.min(startIndex + currentLimit, currentOffers.length);
+    const endIndex = Math.min(startIndex + currentLimit, filteredOffers.length);
     const pageOffersCount = endIndex - startIndex;
     
     // Check if there are more pages
-    const hasMorePages = currentOffset + currentLimit < currentOffers.length;
+    const hasMorePages = currentOffset + currentLimit < filteredOffers.length;
     
     let pageInfoText = `Page ${currentPageNumber}`;
     if (maxPage > 1) {
@@ -2004,7 +2013,7 @@ function updatePagination() {
     
     // Show total count info
     if (totalCountInfoEl) {
-        totalCountInfoEl.textContent = `Total: ${currentOffers.length} offer${currentOffers.length !== 1 ? 's' : ''}`;
+        totalCountInfoEl.textContent = `Total: ${filteredOffers.length} offer${filteredOffers.length !== 1 ? 's' : ''}`;
     }
     
     // Prev button: enabled if not on first page
@@ -2061,10 +2070,11 @@ async function jumpToPage() {
         return;
     }
     
-    // Calculate max page based on filtered offers
+    // Calculate max page based on filtered (status) offers
+    const filteredOffers = getOffersFilteredByStatus();
     let maxPage = 1;
-    if (currentOffers.length > 0 && currentLimit > 0) {
-        maxPage = Math.ceil(currentOffers.length / currentLimit);
+    if (filteredOffers.length > 0 && currentLimit > 0) {
+        maxPage = Math.ceil(filteredOffers.length / currentLimit);
     }
     
     if (targetPage > maxPage) {
@@ -2719,6 +2729,54 @@ function loadImportedOffers() {
     }
 }
 
+// Save offers and categories to localStorage for persistence across refresh
+function saveOffersAndCategories() {
+    try {
+        localStorage.setItem('allegro_allOffers', JSON.stringify(allLoadedOffers));
+        localStorage.setItem('allegro_allCategories', JSON.stringify(allCategories));
+        localStorage.setItem('allegro_categoriesWithProducts', JSON.stringify(categoriesWithProducts));
+    } catch (e) {
+        console.error('Error saving offers/categories to localStorage:', e);
+    }
+}
+
+// Load offers and categories from localStorage on startup
+function loadOffersAndCategoriesFromStorage() {
+    try {
+        const savedOffers = localStorage.getItem('allegro_allOffers');
+        const savedCategories = localStorage.getItem('allegro_allCategories');
+        const savedCategoriesWithProducts = localStorage.getItem('allegro_categoriesWithProducts');
+
+        if (savedOffers) {
+            allLoadedOffers = JSON.parse(savedOffers) || [];
+            currentOffers = allLoadedOffers.slice();
+            totalCount = currentOffers.length;
+            currentOffset = 0;
+            currentPageNumber = 1;
+            pageHistory = [];
+            totalProductsSeen = 0;
+            if (currentOffers.length > 0) {
+                displayOffersPage();
+            }
+        }
+
+        if (savedCategories) {
+            allCategories = JSON.parse(savedCategories) || [];
+        }
+        if (savedCategoriesWithProducts) {
+            categoriesWithProducts = JSON.parse(savedCategoriesWithProducts) || [];
+        }
+
+        // Display categories if we have any saved
+        if (allCategories.length > 0) {
+            displayCategories(allCategories);
+            updateCategorySelect();
+        }
+    } catch (e) {
+        console.error('Error loading offers/categories from localStorage:', e);
+    }
+}
+
 // Clear selection - unselect all products (checkboxes)
 function clearSearch() {
     // Uncheck any selected offer checkboxes
@@ -2825,6 +2883,9 @@ async function loadCategoriesFromOffers() {
             if (categoriesArray.length === 0) {
                 categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #666;">No categories found in your offers. Load offers to see categories.</p>';
             }
+
+            // Persist latest categories along with any loaded offers
+            saveOffersAndCategories();
         } else {
             throw new Error(result.error?.message || 'Failed to fetch offers');
         }
@@ -3044,12 +3105,6 @@ function selectCategory(categoryId) {
         selectedCategorySelect.value = categoryId || '';
     }
     
-    // Enable product count when category is selected
-    const limitSelect = document.getElementById('limit');
-    if (limitSelect) {
-        limitSelect.disabled = false;
-    }
-    
     // Filter and re-display existing offers if any are loaded
     if (allLoadedOffers.length > 0) {
         // Filter offers based on selected category
@@ -3126,12 +3181,6 @@ function updateCategorySelect() {
             }
         });
         
-        // Enable/disable product count based on category selection
-        const limitSelect = document.getElementById('limit');
-        if (limitSelect) {
-            limitSelect.disabled = !categoryId;
-        }
-        
         // If no category selected (All Categories), clear selection and re-display all products
         if (!categoryId) {
             selectedCategoryId = null;
@@ -3199,12 +3248,6 @@ function clearCategorySelection() {
             item.classList.remove('selected');
         }
     });
-    
-    // Enable product count (can still load offers without category)
-    const limitSelect = document.getElementById('limit');
-    if (limitSelect) {
-        limitSelect.disabled = false;
-    }
     
     // If we have loaded offers, show all of them
     if (allLoadedOffers.length > 0) {
