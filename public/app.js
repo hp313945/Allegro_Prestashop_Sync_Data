@@ -1825,12 +1825,20 @@ function createOfferCard(product) {
     
     return `
         <div class="offer-card" data-product-id="${productId}">
-            <div class="offer-image-wrapper">
-                <div class="offer-image-container">
+            <div class="offer-left-column">
+                ${statusBadge ? `
+                    <div class="offer-status-badge ${
+                        statusBadge === 'ACTIVE' ? 'offer-status-active' : 
+                        (statusBadge === 'ENDED' ? 'offer-status-ended' : 'offer-status-inactive')
+                    }">
+                        ${statusBadge}
+                    </div>
+                ` : ''}
+                <div class="offer-image-wrapper">
                     ${mainImage ? `
                         <img src="${mainImage}" alt="${escapeHtml(productName)}" class="offer-image" 
-                            loading="lazy"
-                            onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                             loading="lazy"
+                             onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
                         <div class="offer-image-placeholder" style="display: none;">
                             <span>No Image</span>
                         </div>
@@ -1839,26 +1847,9 @@ function createOfferCard(product) {
                             <span>No Image</span>
                         </div>
                     `}
-                    ${statusBadge ? `
-                        <div class="offer-status-badge ${
-                            statusBadge === 'ACTIVE' ? 'offer-status-active' : 
-                            (statusBadge === 'ENDED' ? 'offer-status-ended' : 'offer-status-inactive')
-                        }">
-                            ${statusBadge}
-                        </div>
-                    ` : ''}
                 </div>
-                
-                ${(stockInfo || statsInfo) ? `
-                    <div class="offer-metrics offer-metrics-bottom">
-                        ${stockInfo ? `
-                            <div class="metric metric-stock" title="Current stock">
-                                <span class="metric-icon metric-icon-stock">📦</span>
-                                <span class="metric-label">Stock</span>
-                                <span class="metric-value">${stockInfo.available}</span>
-                                ${stockInfo.sold > 0 ? `<span class="metric-sub">(${stockInfo.sold} sold)</span>` : ''}
-                            </div>
-                        ` : ''}
+                ${(watchersCount > 0 || visitsCount > 0) ? `
+                    <div class="offer-metrics offer-metrics-left">
                         ${watchersCount > 0 ? `
                             <div class="metric metric-watchers" title="People watching this offer">
                                 <span class="metric-icon metric-icon-watchers">★</span>
@@ -1947,6 +1938,17 @@ function createOfferCard(product) {
                         <span class="info-value category-id">${escapeHtml(categoryName)}</span>
                     </div>
                 </div>
+
+                ${stockInfo ? `
+                    <div class="offer-metrics offer-metrics-bottom">
+                        <div class="metric metric-stock" title="Current stock">
+                            <span class="metric-icon metric-icon-stock">📦</span>
+                            <span class="metric-label">Stock</span>
+                            <span class="metric-value">${stockInfo.available}</span>
+                            ${stockInfo.sold > 0 ? `<span class="metric-sub">(${stockInfo.sold} sold)</span>` : ''}
+                        </div>
+                    </div>
+                ` : ''}
             </div>
         </div>
     `;

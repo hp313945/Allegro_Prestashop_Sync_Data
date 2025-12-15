@@ -971,6 +971,19 @@ body {
     align-items: stretch;
 }
 
+/* Left column: status + image + quick stats */
+.offer-left-column {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    width: 100px;
+    min-width: 100px;
+    padding: 4px 4px 6px 4px;
+    gap: 4px;
+    border-right: 1px solid #f0f0f0;
+}
+
 .offer-card:hover {
     border-color: #1a73e8;
     box-shadow: 0 4px 12px rgba(26, 115, 232, 0.2);
@@ -995,8 +1008,7 @@ body {
     overflow: hidden;
     position: relative;
     flex-shrink: 0;
-    border-right: 1px solid #f0f0f0;
-    align-self: stretch;
+    align-self: center;
 }
 
 .offer-image {
@@ -1246,6 +1258,17 @@ body {
     background: none;
 }
 
+/* Metrics under image in left column */
+.offer-metrics-left {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.offer-metrics-left .metric {
+    width: 100%;
+    justify-content: flex-start;
+}
+
 /* Metrics at bottom of whole product card */
 .offer-metrics-bottom {
     margin-top: 6px;
@@ -1255,9 +1278,7 @@ body {
 
 /* Status badge on top of image (ACTIVE / ENDED / INACTIVE) */
 .offer-status-badge {
-    position: absolute;
-    top: 3px;
-    left: 3px;
+    position: static;
     padding: 2px 6px;
     border-radius: 999px;
     font-size: 0.65em;
