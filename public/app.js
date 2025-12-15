@@ -997,7 +997,7 @@ async function fetchAllOffers() {
     
     loadingEl.style.display = 'block';
     errorEl.style.display = 'none';
-    offersListEl.innerHTML = '<div style="text-align: center; padding: 40px; color: #1a73e8;">Loading all offers...</div>';
+    offersListEl.innerHTML = '<div style="text-align: center; padding: 40px; color: #1a73e8;">Loading offers...</div>';
     
     try {
         let allOffers = [];
@@ -1029,6 +1029,41 @@ async function fetchAllOffers() {
                 // Get total count from first response
                 if (totalCountFromAPI === null) {
                     totalCountFromAPI = result.data.totalCount || result.data.count || 0;
+                }
+
+                // After the first successful page, immediately show offers to the user
+                // so the UI becomes responsive without waiting for all pages.
+                if (offset === 0) {
+                    // Store currently loaded offers
+                    allLoadedOffers = allOffers;
+                    totalCount = totalCountFromAPI || allOffers.length;
+
+                    // Apply category filter if selected
+                    if (selectedCategoryId !== null) {
+                        currentOffers = allOffers.filter(offer => {
+                            let offerCategoryId = null;
+                            if (offer.category) {
+                                if (typeof offer.category === 'string') {
+                                    offerCategoryId = offer.category;
+                                } else if (offer.category.id) {
+                                    offerCategoryId = offer.category.id;
+                                }
+                            }
+                            return offerCategoryId && String(offerCategoryId) === String(selectedCategoryId);
+                        });
+                    } else {
+                        currentOffers = allOffers;
+                    }
+
+                    // Reset pagination for the first visible page
+                    currentOffset = 0;
+                    currentPageNumber = 1;
+                    pageHistory = [];
+                    totalProductsSeen = 0;
+
+                    // Render first page immediately
+                    displayOffersPage();
+                    updateImportButtons();
                 }
                 
                 // Check if there are more offers to fetch
@@ -1087,43 +1122,37 @@ async function fetchAllOffers() {
             }
         }
         
-        // Store all loaded offers
+        // Store all loaded offers (including any loaded after the first page)
         allLoadedOffers = allOffers;
         totalCount = totalCountFromAPI || allOffers.length;
         
-        // Log first offer to debug structure
-        if (allOffers.length > 0) {
-            console.log(`Loaded ${allOffers.length} total offers`);
-            console.log('First offer from API:', JSON.stringify(allOffers[0], null, 2));
-            console.log('Offer category structure:', allOffers[0].category);
-        }
-        
-        // Apply category filter if selected
-        if (selectedCategoryId !== null) {
-            currentOffers = allOffers.filter(offer => {
-                let offerCategoryId = null;
-                if (offer.category) {
-                    if (typeof offer.category === 'string') {
-                        offerCategoryId = offer.category;
-                    } else if (offer.category.id) {
-                        offerCategoryId = offer.category.id;
+        // If for some reason we didn't render on the first page (e.g., no offers),
+        // ensure the view is still updated here.
+        if (currentOffers.length === 0 && allOffers.length > 0) {
+            if (selectedCategoryId !== null) {
+                currentOffers = allOffers.filter(offer => {
+                    let offerCategoryId = null;
+                    if (offer.category) {
+                        if (typeof offer.category === 'string') {
+                            offerCategoryId = offer.category;
+                        } else if (offer.category.id) {
+                            offerCategoryId = offer.category.id;
+                        }
                     }
-                }
-                return offerCategoryId && String(offerCategoryId) === String(selectedCategoryId);
-            });
-        } else {
-            currentOffers = allOffers;
+                    return offerCategoryId && String(offerCategoryId) === String(selectedCategoryId);
+                });
+            } else {
+                currentOffers = allOffers;
+            }
+
+            currentOffset = 0;
+            currentPageNumber = 1;
+            pageHistory = [];
+            totalProductsSeen = 0;
+
+            displayOffersPage();
+            updateImportButtons();
         }
-        
-        // Reset pagination
-        currentOffset = 0;
-        currentPageNumber = 1;
-        pageHistory = [];
-        totalProductsSeen = 0;
-        
-        // Display first page
-        displayOffersPage();
-        updateImportButtons();
         
         // Update categories to show only those with products
         if (allCategories.length > 0) {
@@ -1513,7 +1542,37 @@ function createOfferCard(product) {
             }
         }
     }
+
+    // Extract badges from product data
+    const badges = [];
     
+    // Check for SMART badge (common Allegro badge)
+    if (product.promotions?.smart || product.smart || product.badges?.smart) {
+        badges.push('SMART');
+    }
+    
+    // Check for SUPER PRICE badge
+    if (product.promotions?.superPrice || product.superPrice || product.badges?.superPrice) {
+        badges.push('SUPER PRICE');
+    }
+    
+    // Check for lowest price guarantee
+    if (product.promotions?.lowestPrice || product.lowestPrice || product.badges?.lowestPrice) {
+        badges.push('LOWEST PRICE');
+    }
+    
+    // Add publication status as badge
+    if (product.publication?.status) {
+        const status = product.publication.status;
+        if (status === 'ACTIVE') {
+            badges.push('ACTIVE');
+        } else if (status === 'INACTIVE') {
+            badges.push('INACTIVE');
+        } else if (status === 'ENDED') {
+            badges.push('ENDED');
+        }
+    }
+
     // Determine status badge (ACTIVE / ENDED / INACTIVE)
     let statusBadge = '';
     if (Array.isArray(badges) && badges.length > 0) {
@@ -1652,36 +1711,6 @@ function createOfferCard(product) {
     // Format prices if available
     const formattedCurrentPrice = currentPrice ? parseFloat(currentPrice).toFixed(2) : null;
     const formattedOriginalPrice = originalPrice ? parseFloat(originalPrice).toFixed(2) : null;
-    
-    // Extract badges from product data
-    const badges = [];
-    
-    // Check for SMART badge (common Allegro badge)
-    if (product.promotions?.smart || product.smart || product.badges?.smart) {
-        badges.push('SMART');
-    }
-    
-    // Check for SUPER PRICE badge
-    if (product.promotions?.superPrice || product.superPrice || product.badges?.superPrice) {
-        badges.push('SUPER PRICE');
-    }
-    
-    // Check for lowest price guarantee
-    if (product.promotions?.lowestPrice || product.lowestPrice || product.badges?.lowestPrice) {
-        badges.push('LOWEST PRICE');
-    }
-    
-    // Add publication status as badge
-    if (product.publication?.status) {
-        const status = product.publication.status;
-        if (status === 'ACTIVE') {
-            badges.push('ACTIVE');
-        } else if (status === 'INACTIVE') {
-            badges.push('INACTIVE');
-        } else if (status === 'ENDED') {
-            badges.push('ENDED');
-        }
-    }
     
     // Extract delivery information
     let deliveryInfo = null;
