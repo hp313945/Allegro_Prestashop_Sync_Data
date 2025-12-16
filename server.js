@@ -98,8 +98,10 @@ let userCredentials = {
 let accessToken = null;
 let tokenExpiry = null;
 
-// Category cache to prevent duplicate creation during export sessions
-// Maps category name (lowercase) to category ID
+// Category cache (legacy, now disabled for lookups)
+// Left as an empty Map so existing code paths that used it for
+// concurrency control won't crash, but category existence is now
+// always validated directly against PrestaShop instead of this cache.
 let categoryCache = new Map();
 
 // Store user OAuth tokens (for user-level authentication)
@@ -297,18 +299,10 @@ function saveCategoryCache() {
  * Load category cache from file (on server startup)
  */
 function loadCategoryCache() {
-  try {
-    if (fs.existsSync(CATEGORY_CACHE_FILE)) {
-      const cacheData = JSON.parse(fs.readFileSync(CATEGORY_CACHE_FILE, 'utf8'));
-      if (cacheData.categories) {
-        categoryCache = new Map(Object.entries(cacheData.categories));
-        console.log(`Loaded ${categoryCache.size} categories from cache`);
-      }
-    }
-  } catch (error) {
-    console.error('Error loading category cache:', error.message);
-    categoryCache = new Map();
-  }
+  // Cache loading from disk has been disabled.
+  // Categories are now always resolved directly from PrestaShop
+  // to ensure we work with the latest data and avoid stale cache issues.
+  categoryCache = new Map();
 }
 
 /**
@@ -330,7 +324,28 @@ loadCredentials();
 loadTokens();
 loadPrestashopCredentials();
 loadProductMappings();
+// Category cache loading is disabled – categories are always checked
+// directly against PrestaShop instead of using a persisted cache.
 loadCategoryCache();
+
+// Watch PrestaShop credentials file for external changes (make config dynamic)
+try {
+  if (fs.existsSync(PRESTASHOP_CREDENTIALS_FILE)) {
+    fs.watch(PRESTASHOP_CREDENTIALS_FILE, { persistent: false }, (eventType) => {
+      if (eventType === 'change' || eventType === 'rename') {
+        console.log('Detected change in .prestashop.json, reloading PrestaShop credentials...');
+        try {
+          loadPrestashopCredentials();
+          console.log('PrestaShop credentials reloaded successfully from .prestashop.json');
+        } catch (watchError) {
+          console.error('Error reloading PrestaShop credentials after file change:', watchError.message);
+        }
+      }
+    });
+  }
+} catch (watchInitError) {
+  console.warn('Unable to watch .prestashop.json for changes:', watchInitError.message);
+}
 
 // Store visitor logs (in-memory storage)
 // In production, use proper database storage
@@ -870,6 +885,7 @@ async function prestashopApiRequest(endpoint, method = 'GET', data = null) {
     if (response.status >= 400) {
       const error = new Error(`PrestaShop API returned status ${response.status}`);
       error.response = response;
+      error.config = config; // Attach config so we can see the URL in error messages
       throw error;
     }
     
@@ -906,10 +922,16 @@ async function prestashopApiRequest(endpoint, method = 'GET', data = null) {
     }
     
     if (error.response?.status === 404) {
-      const attemptedUrl = error.config?.url || 'unknown';
+      const attemptedUrl = error.config?.url || error.config?.baseURL || 'unknown';
       const baseUrl = prestashopCredentials.baseUrl || 'unknown';
-      const expectedApiUrl = baseUrl.replace(/\/+$/, '') + '/api/';
-      throw new Error(`PrestaShop API endpoint not found (404).\n\nAttempted URL: ${attemptedUrl}\nConfigured Base URL: ${baseUrl}\nExpected API URL: ${expectedApiUrl}\n\nPlease verify:\n• The Base URL is correct (e.g., http://localhost/polandstore)\n• Web Service is enabled in PrestaShop (Advanced Parameters → Webservice)\n• Try accessing ${expectedApiUrl} in your browser\n• Make sure the URL matches exactly what works in your browser`);
+      // Reconstruct the expected API URL the same way we build it
+      let expectedApiUrl = baseUrl.trim().replace(/\/+$/, '');
+      if (!expectedApiUrl.endsWith('/api')) {
+        expectedApiUrl += '/api';
+      }
+      expectedApiUrl += '/';
+      
+      throw new Error(`PrestaShop API endpoint not found (404).\n\nAttempted URL: ${attemptedUrl}\nConfigured Base URL: ${baseUrl}\nExpected API URL: ${expectedApiUrl}\n\nPlease verify:\n• The Base URL is correct (e.g., http://localhost/polandstore or https://www.interkul.net)\n• Web Service is enabled in PrestaShop (Advanced Parameters → Webservice)\n• Try accessing ${expectedApiUrl} in your browser\n• Make sure the URL matches exactly what works in your browser\n• If using HTTPS, ensure SSL certificate is valid`);
     }
     
     if (error.response?.status === 403) {
@@ -1772,31 +1794,14 @@ app.get('/api/prestashop/test', async (req, res) => {
 /**
  * Find existing category by name in PrestaShop
  * Returns category ID if found, null otherwise
- * Uses cache to avoid duplicate API calls and prevent race conditions
+ * Always checks PrestaShop directly to avoid stale cache issues
  */
 async function findCategoryByName(categoryName) {
   try {
     const normalizedName = categoryName.trim().toLowerCase();
-    
-    // First check the in-memory cache
-    if (categoryCache.has(normalizedName)) {
-      const cachedId = categoryCache.get(normalizedName);
-      // If cache has 'creating' marker, don't return it - wait and check database instead
-      if (cachedId === 'creating') {
-        console.log(`Category "${categoryName}" is being created, waiting and checking database...`);
-        // Wait a bit for the creation to complete
-        await new Promise(resolve => setTimeout(resolve, 500));
-        // Don't return 'creating', continue to database check below
-      } else if (cachedId && cachedId !== 'creating' && !isNaN(cachedId)) {
-        // Valid category ID found in cache
-        console.log(`Category "${categoryName}" found in cache (ID: ${cachedId})`);
-        return cachedId;
-      }
-    }
-    
-    // Cache miss or 'creating' marker - always check database to ensure we find existing categories
-    // This is especially important after server restarts when cache is empty
-    console.log(`Checking database for category "${categoryName}"...`);
+    // Always check database to ensure we find existing categories
+    // This guarantees we compare against real PrestaShop categories
+    console.log(`Checking PrestaShop for category "${categoryName}"...`);
     
     // Fetch all categories (with pagination support)
     let allCategories = [];
@@ -1883,11 +1888,8 @@ async function findCategoryByName(categoryName) {
           const nameValue = nameEntry.value || (typeof nameEntry === 'string' ? nameEntry : null);
           if (nameValue && typeof nameValue === 'string' && nameValue.trim().toLowerCase() === normalizedName) {
             const categoryId = category.id || category.category?.id;
-            // Cache the result for future lookups
             if (categoryId) {
-              updateCategoryCache(normalizedName, categoryId);
-            }
-            return categoryId;
+              return categoryId;
           }
         }
       }
@@ -2011,50 +2013,11 @@ app.post('/api/prestashop/categories', async (req, res) => {
       });
     }
 
-    // Check if category already exists before creating
-    const normalizedName = name.trim().toLowerCase();
-    let existingCategoryId = categoryCache.get(normalizedName);
+    // Always check existing categories directly in PrestaShop by name
+    let existingCategoryId = await findCategoryByName(name);
 
-    // If cache has 'creating' marker, wait a bit and check again
-    if (existingCategoryId === 'creating') {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      existingCategoryId = categoryCache.get(normalizedName);
-      if (existingCategoryId === 'creating') {
-        existingCategoryId = await findCategoryByName(name);
-      }
-    }
-
-    // If cache says category exists with a numeric ID, verify it really exists in PrestaShop
-    if (existingCategoryId && existingCategoryId !== 'creating' && !isNaN(existingCategoryId)) {
-      try {
-        await prestashopApiRequest(`categories/${existingCategoryId}`, 'GET');
-        // Category really exists – return it
-        return res.json({
-          success: true,
-          category: { id: existingCategoryId },
-          message: 'Category already exists',
-          existing: true
-        });
-      } catch (verifyError) {
-        // If PrestaShop says 404, the cached ID is stale – remove from cache and continue as "not found"
-        if (verifyError.response?.status === 404) {
-          console.warn(`Cached category "${name}" with ID ${existingCategoryId} no longer exists in PrestaShop. Removing from cache.`);
-          categoryCache.delete(normalizedName);
-          saveCategoryCache();
-          existingCategoryId = null;
-        } else {
-          console.warn('Error verifying cached category in PrestaShop:', verifyError.message);
-        }
-      }
-    }
-
-    if (!existingCategoryId || existingCategoryId === 'creating') {
-      existingCategoryId = await findCategoryByName(name);
-    }
-
-    // Only proceed if we have a valid numeric ID (not 'creating' marker)
-    if (existingCategoryId && existingCategoryId !== 'creating' && !isNaN(existingCategoryId)) {
-      // Category already exists, return the existing one
+    // If we found a matching category name, just return it
+    if (existingCategoryId && !isNaN(existingCategoryId)) {
       return res.json({
         success: true,
         category: { id: existingCategoryId },
@@ -2063,9 +2026,7 @@ app.post('/api/prestashop/categories', async (req, res) => {
       });
     }
 
-    // Mark in cache to prevent concurrent creation
-    categoryCache.set(normalizedName, 'creating');
-
+    // No matching category name in PrestaShop – create a new one
     const categoryData = {
       name: [
         { id: 1, value: name }, // Polish (id: 1)
@@ -2079,28 +2040,9 @@ app.post('/api/prestashop/categories', async (req, res) => {
       ]
     };
 
-    // Final check right before creating - double protection against race conditions
-    const finalCheck = await findCategoryByName(name);
-    if (finalCheck && finalCheck !== 'creating' && !isNaN(finalCheck)) {
-      // Category was created by another request while we were preparing
-      updateCategoryCache(normalizedName, finalCheck);
-      return res.json({
-        success: true,
-        category: { id: finalCheck },
-        message: 'Category already exists (created by another request)',
-        existing: true
-      });
-    }
-
     const xmlBody = buildCategoryXml(categoryData);
     const data = await prestashopApiRequest('categories', 'POST', xmlBody);
-    const newCategoryId = data.category?.id || data.id;
-    
-    // Update cache with the actual category ID
-    if (newCategoryId) {
-      updateCategoryCache(normalizedName, newCategoryId);
-    }
-    
+
     res.json({
       success: true,
       category: data.category || data,
@@ -2171,64 +2113,25 @@ app.post('/api/prestashop/products', async (req, res) => {
         categoryName = categoryName || allegroCategory?.name || 'Imported Category';
         const normalizedCategoryName = categoryName.trim().toLowerCase();
         
-        // Check cache first (fastest check)
-        let existingCategoryId = categoryCache.get(normalizedCategoryName);
-
-        // If cache has 'creating' marker, wait a bit and check again
-        if (existingCategoryId === 'creating') {
-          // Wait for the other request to finish creating
-          await new Promise(resolve => setTimeout(resolve, 500));
-          existingCategoryId = categoryCache.get(normalizedCategoryName);
-          // If still 'creating', check the database
-          if (existingCategoryId === 'creating') {
-            existingCategoryId = await findCategoryByName(categoryName);
-          }
-        }
-
-        // If cache says category exists with a numeric ID, verify it really exists in PrestaShop
-        if (existingCategoryId && existingCategoryId !== 'creating' && !isNaN(existingCategoryId)) {
-          try {
-            await prestashopApiRequest(`categories/${existingCategoryId}`, 'GET');
-          } catch (verifyError) {
-            if (verifyError.response?.status === 404) {
-              console.warn(`Cached category "${categoryName}" with ID ${existingCategoryId} no longer exists in PrestaShop. Removing from cache.`);
-              categoryCache.delete(normalizedCategoryName);
-              saveCategoryCache();
-              existingCategoryId = null;
-            } else {
-              console.warn('Error verifying cached category in PrestaShop:', verifyError.message);
-            }
-          }
-        }
-
-        // If not in cache, was 'creating', or cache entry was invalid, check PrestaShop database
-        if (!existingCategoryId || existingCategoryId === 'creating') {
-          existingCategoryId = await findCategoryByName(categoryName);
-        }
+        // Always check existing categories directly in PrestaShop by name
+        let existingCategoryId = await findCategoryByName(categoryName);
 
         // Double-check: if still not found, do one more lookup right before creating
         // This prevents race conditions when multiple products are exported simultaneously
-        if (!existingCategoryId || existingCategoryId === 'creating') {
-          // Small delay to allow any concurrent requests to complete
+        if (!existingCategoryId || isNaN(existingCategoryId)) {
           await new Promise(resolve => setTimeout(resolve, 100));
-          // Check one more time
           existingCategoryId = await findCategoryByName(categoryName);
         }
         
         let isNewCategory = false;
         
-        // Only proceed if we have a valid numeric ID (not 'creating' marker)
-        if (existingCategoryId && existingCategoryId !== 'creating' && !isNaN(existingCategoryId)) {
+        // Only proceed if we have a valid numeric ID
+        if (existingCategoryId && !isNaN(existingCategoryId)) {
           // Category already exists, use the existing one
           finalCategoryId = existingCategoryId;
-          // Ensure it's in cache
-          updateCategoryCache(normalizedCategoryName, existingCategoryId);
           console.log(`Category "${categoryName}" already exists in PrestaShop (ID: ${finalCategoryId}), using existing category`);
         } else {
           // Category doesn't exist, create it
-          // Mark in cache immediately to prevent concurrent creation
-          // We'll update with the actual ID after creation
-          updateCategoryCache(normalizedCategoryName, 'creating');
           isNewCategory = true;
           // Build category description from available Allegro category data
           let categoryDescription = '';
@@ -2258,10 +2161,9 @@ app.post('/api/prestashop/products', async (req, res) => {
           
           // Final check right before creating - double protection against race conditions
           const finalCheck = await findCategoryByName(categoryName);
-          if (finalCheck && finalCheck !== 'creating' && !isNaN(finalCheck)) {
+          if (finalCheck && !isNaN(finalCheck)) {
             // Category was created by another request while we were preparing
             finalCategoryId = finalCheck;
-            updateCategoryCache(normalizedCategoryName, finalCategoryId);
             console.log(`Category "${categoryName}" was created by another request (ID: ${finalCategoryId}), using existing category`);
             isNewCategory = false;
           } else {
@@ -2276,9 +2178,6 @@ app.post('/api/prestashop/products', async (req, res) => {
             const categoryXml = buildCategoryXml(categoryData);
             const categoryRes = await prestashopApiRequest('categories', 'POST', categoryXml);
             finalCategoryId = categoryRes.category?.id || categoryRes.id || 2;
-            
-            // Update cache with the actual category ID
-            updateCategoryCache(normalizedCategoryName, finalCategoryId);
             
             console.log(`Created new category "${categoryName}" (ID: ${finalCategoryId}) from Allegro category ID: ${offer.category.id}`);
           }
