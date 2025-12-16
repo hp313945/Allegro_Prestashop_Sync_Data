@@ -514,6 +514,7 @@ function buildProductXml(product) {
 function buildCategoryXml(category) {
   const nameXml = buildLocalizedFieldXml('name', category.name);
   const linkRewriteXml = buildLocalizedFieldXml('link_rewrite', category.link_rewrite);
+  const descriptionXml = category.description ? buildLocalizedFieldXml('description', category.description) : '';
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
@@ -522,6 +523,7 @@ function buildCategoryXml(category) {
     <id_parent>${xmlEscape(category.id_parent)}</id_parent>
     <active>${xmlEscape(category.active)}</active>
     ${linkRewriteXml}
+    ${descriptionXml}
   </category>
 </prestashop>`;
 }
@@ -1602,7 +1604,7 @@ app.post('/api/prestashop/categories', async (req, res) => {
  */
 app.post('/api/prestashop/products', async (req, res) => {
   try {
-    const { offer, categoryId, autoCreateCategory } = req.body;
+    const { offer, categoryId, autoCreateCategory, categories } = req.body;
     
     if (!offer || !offer.id || !offer.name) {
       return res.status(400).json({
@@ -1620,25 +1622,84 @@ app.post('/api/prestashop/products', async (req, res) => {
     let finalCategoryId = categoryId || 2; // Default to Home category (id: 2)
     
     // If category doesn't exist and auto-create is enabled, create it
-    if (!categoryId && autoCreateCategory && offer.category) {
-      const categoryName = offer.category.name || 'Imported Category';
+    if (!categoryId && autoCreateCategory && offer.category && offer.category.id) {
       try {
-      const categoryXml = buildCategoryXml({
-        name: [
-          { id: 1, value: categoryName },
-          { id: 2, value: categoryName }
-        ],
-        id_parent: 2,
-        active: 1,
-        link_rewrite: [
-          { id: 1, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') },
-          { id: 2, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') }
-        ]
-      });
-      const categoryRes = await prestashopApiRequest('categories', 'POST', categoryXml);
+        let allegroCategory = null;
+        let categoryName = null;
+        
+        // First, try to use category info already available in the request
+        // 1. Check if category name is directly in offer.category
+        if (offer.category.name) {
+          categoryName = offer.category.name;
+          allegroCategory = offer.category;
+        }
+        // 2. Check if categories list is provided and find the category by ID
+        else if (categories && Array.isArray(categories)) {
+          const categoryIdStr = String(offer.category.id);
+          const foundCategory = categories.find(cat => 
+            String(cat.id) === categoryIdStr || String(cat.category?.id) === categoryIdStr
+          );
+          if (foundCategory) {
+            categoryName = foundCategory.name || foundCategory.category?.name;
+            allegroCategory = foundCategory.category || foundCategory;
+          }
+        }
+        // 3. If category info not found, fetch from Allegro API
+        if (!categoryName || !allegroCategory) {
+          allegroCategory = await allegroApiRequest(`/sale/categories/${offer.category.id}`);
+          categoryName = allegroCategory.name || 'Imported Category';
+        }
+        
+        // Use real category name from available source, fallback to default if not available
+        categoryName = categoryName || allegroCategory?.name || 'Imported Category';
+        
+        // Build category description from available Allegro category data
+        let categoryDescription = '';
+        if (categoryName && categoryName !== 'Imported Category') {
+          categoryDescription = `Category imported from Allegro: ${categoryName}`;
+          if (allegroCategory && allegroCategory.leaf !== undefined) {
+            categoryDescription += ` (${allegroCategory.leaf ? 'Leaf category' : 'Parent category'})`;
+          }
+          if (allegroCategory && allegroCategory.tree && allegroCategory.tree.name) {
+            categoryDescription += ` - Tree: ${allegroCategory.tree.name}`;
+          }
+        }
+        
+        // Build category XML with real category information
+        const categoryData = {
+          name: [
+            { id: 1, value: categoryName },
+            { id: 2, value: categoryName }
+          ],
+          id_parent: 2,
+          active: 1,
+          link_rewrite: [
+            { id: 1, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') },
+            { id: 2, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') }
+          ]
+        };
+        
+        // Add description if available
+        if (categoryDescription) {
+          categoryData.description = [
+            { id: 1, value: categoryDescription },
+            { id: 2, value: categoryDescription }
+          ];
+        }
+        console.log(categoryData, '=====================================');
+        const categoryXml = buildCategoryXml(categoryData);
+        const categoryRes = await prestashopApiRequest('categories', 'POST', categoryXml);
         finalCategoryId = categoryRes.category?.id || categoryRes.id || 2;
+        
+        console.log(`Created category "${categoryName}" (ID: ${finalCategoryId}) from Allegro category ID: ${offer.category.id}`);
+        
+        // Note: Category images would need to be uploaded separately via /api/images/categories/{id}
+        // if Allegro provides category image URLs, but typically Allegro categories don't have images
       } catch (error) {
-        console.error('Failed to create category:', error.message);
+        console.error('Failed to fetch category from Allegro or create category in PrestaShop:', error.message);
+        if (error.response?.data) {
+          console.error('Allegro API error details:', error.response.data);
+        }
         finalCategoryId = 2; // Fallback to Home
       }
     }

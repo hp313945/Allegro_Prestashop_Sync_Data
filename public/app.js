@@ -2693,7 +2693,8 @@ async function exportToPrestashop() {
                 body: JSON.stringify({
                     offer: offer,
                     categoryId: categoryId,
-                    autoCreateCategory: autoCreateCategories
+                    autoCreateCategory: autoCreateCategories,
+                    categories: allCategories // Send categories list so backend can use existing category info
                 })
             });
             
