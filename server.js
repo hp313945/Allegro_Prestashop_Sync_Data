@@ -126,7 +126,6 @@ function saveTokens() {
       savedAt: new Date().toISOString()
     };
     fs.writeFileSync(TOKEN_STORAGE_FILE, JSON.stringify(tokenData, null, 2), 'utf8');
-    console.log('Tokens saved to file');
   } catch (error) {
     console.error('Error saving tokens:', error.message);
   }
@@ -150,16 +149,11 @@ function loadTokens() {
       if (tokenData.tokenExpiry) {
         tokenExpiry = tokenData.tokenExpiry;
       }
-      
-      console.log('Tokens loaded from file');
-      
       // Check if refresh token is still valid (not expired)
       if (userOAuthTokens.refreshToken && userOAuthTokens.expiresAt) {
         const timeUntilExpiry = userOAuthTokens.expiresAt - Date.now();
-        if (timeUntilExpiry > 0) {
-          console.log(`Access token expires in ${Math.round(timeUntilExpiry / 1000 / 60)} minutes`);
-        } else {
-          console.log('Access token expired, will use refresh token on next request');
+        if (!(timeUntilExpiry > 0)) {
+          // Access token expired, will use refresh token on next request
         }
       }
     }
@@ -186,7 +180,6 @@ function saveCredentials() {
       savedAt: new Date().toISOString()
     };
     fs.writeFileSync(CREDENTIALS_STORAGE_FILE, JSON.stringify(credData, null, 2), 'utf8');
-    console.log('Credentials saved to file');
   } catch (error) {
     console.error('Error saving credentials:', error.message);
   }
@@ -203,7 +196,6 @@ function loadCredentials() {
       if (credData.clientId && credData.clientSecret) {
         userCredentials.clientId = credData.clientId;
         userCredentials.clientSecret = credData.clientSecret;
-        console.log('Credentials loaded from file');
       }
     }
   } catch (error) {
@@ -223,7 +215,6 @@ function savePrestashopCredentials() {
       savedAt: new Date().toISOString()
     };
     fs.writeFileSync(PRESTASHOP_CREDENTIALS_FILE, JSON.stringify(credData, null, 2), 'utf8');
-    console.log('PrestaShop credentials saved to file');
   } catch (error) {
     console.error('Error saving PrestaShop credentials:', error.message);
   }
@@ -241,7 +232,6 @@ function loadPrestashopCredentials() {
         prestashopCredentials.baseUrl = credData.baseUrl;
         prestashopCredentials.apiKey = credData.apiKey;
         prestashopCredentials.disableStockSyncToAllegro = credData.disableStockSyncToAllegro || false;
-        console.log('PrestaShop credentials loaded from file');
       }
     }
   } catch (error) {
@@ -255,7 +245,6 @@ function loadPrestashopCredentials() {
 function saveProductMappings() {
   try {
     fs.writeFileSync(PRODUCT_MAPPINGS_FILE, JSON.stringify(productMappings, null, 2), 'utf8');
-    console.log('Product mappings saved to file');
   } catch (error) {
     console.error('Error saving product mappings:', error.message);
   }
@@ -268,7 +257,6 @@ function loadProductMappings() {
   try {
     if (fs.existsSync(PRODUCT_MAPPINGS_FILE)) {
       productMappings = JSON.parse(fs.readFileSync(PRODUCT_MAPPINGS_FILE, 'utf8'));
-      console.log('Product mappings loaded from file');
     }
   } catch (error) {
     console.error('Error loading product mappings:', error.message);
@@ -341,7 +329,6 @@ async function getAccessToken() {
       if (scopeError.response?.status === 400 && 
           (scopeError.response?.data?.error === 'invalid_scope' || 
            scopeError.response?.data?.error_description?.includes('scope'))) {
-        console.log('Scope request failed, trying without explicit scope...');
         tokenRequestBody = 'grant_type=client_credentials';
         response = await axios.post(
           `${ALLEGRO_AUTH_URL}/token`,
@@ -363,11 +350,6 @@ async function getAccessToken() {
     // Set expiry time (subtract 60 seconds as buffer)
     const expiresIn = response.data.expires_in || 3600;
     tokenExpiry = Date.now() + (expiresIn - 60) * 1000;
-
-    // Log token info for debugging (without exposing the actual token)
-    if (response.data.scope) {
-      console.log('Token scopes:', response.data.scope);
-    }
 
     // Save tokens to file
     saveTokens();
@@ -608,9 +590,6 @@ async function prestashopApiRequest(endpoint, method = 'GET', data = null) {
     const separator = url.includes('?') ? '&' : '?';
     const jsonUrl = `${url}${separator}output_format=JSON`;
     
-    // Log the URL for debugging
-    console.log('PrestaShop API Request:', method, jsonUrl);
-    
     // PrestaShop uses Basic Auth with API key as password
     // Format: Basic base64(api_key:)
     const auth = Buffer.from(`${prestashopCredentials.apiKey}:`).toString('base64');
@@ -731,7 +710,6 @@ async function allegroApiRequest(endpoint, params = {}, useUserToken = false) {
     Object.keys(params).forEach(key => {
       url.searchParams.append(key, params[key]);
     });
-    console.log('Final request URL:', url.toString());
     
     const response = await axios.get(`${ALLEGRO_API_URL}${endpoint}`, {
       headers: {
@@ -847,9 +825,6 @@ app.get('/api/oauth/authorize', (req, res) => {
     authUrl += `&scope=${encodeURIComponent(requestedScope)}`;
   }
   
-  console.log('OAuth authorization URL:', authUrl);
-  console.log('Redirect URI:', redirectUri);
-  
   // Return URL as JSON instead of redirecting (frontend will open it)
   res.json({
     success: true,
@@ -945,7 +920,6 @@ app.get('/api/oauth/callback', async (req, res) => {
         });
         userOAuthTokens.userId = userInfoResponse.data.id;
       } catch (userInfoError) {
-        console.log('Could not fetch user info:', userInfoError.message);
       }
       
       // Save tokens to file (persistent storage)
@@ -1014,7 +988,6 @@ app.get('/api/oauth/status', async (req, res) => {
         isConnected = !!(userOAuthTokens.accessToken && userOAuthTokens.expiresAt && Date.now() < userOAuthTokens.expiresAt);
       } catch (refreshError) {
         // Refresh failed - token is not connected
-        console.log('Token refresh failed in status check:', refreshError.message);
         isConnected = false;
       }
     }
@@ -1083,35 +1056,12 @@ app.get('/api/offers', async (req, res) => {
     // Try to fetch user's offers using OAuth token
     try {
       const params = {
-        limit: limit,
-        offset: offset
+      limit: limit,
+      offset: offset
       };
-      
-      console.log('Attempting to fetch user offers from /sale/offers with params:', JSON.stringify(params, null, 2));
       const data = await allegroApiRequest('/sale/offers', params, true); // Use user token
       
-      console.log('Offers response structure:', {
-        hasOffers: !!data.offers,
-        offersCount: data.offers?.length || 0,
-        count: data.count,
-        totalCount: data.totalCount,
-        keys: Object.keys(data)
-      });
-      
       // Log sample offer structure to debug
-      if (data.offers && data.offers.length > 0) {
-        const sampleOffer = data.offers[0];
-        console.log('Sample offer structure:', {
-          id: sampleOffer.id,
-          name: sampleOffer.name,
-          hasImages: !!sampleOffer.images,
-          imagesType: typeof sampleOffer.images,
-          imagesIsArray: Array.isArray(sampleOffer.images),
-          imagesLength: Array.isArray(sampleOffer.images) ? sampleOffer.images.length : 'N/A',
-          category: sampleOffer.category,
-          allKeys: Object.keys(sampleOffer)
-        });
-      }
       
       // Normalize response structure for frontend according to API docs
       // API returns: { "offers": [...], "count": 1, "totalCount": 1234 }
@@ -1141,8 +1091,6 @@ app.get('/api/offers', async (req, res) => {
       
       // If /sale/offers fails with 403, it means we need user-level OAuth
       if (offersError.response?.status === 403) {
-        console.log('/sale/offers requires user-level OAuth. Providing instructions to user.');
-        
         return res.status(403).json({
           success: false,
           error: 'User OAuth authentication required. Please authorize your account.',
@@ -1455,8 +1403,6 @@ app.get('/api/prestashop/test', async (req, res) => {
     }
 
     const apiUrl = `${prestashopCredentials.baseUrl.replace(/\/+$/, '')}/api/`;
-    console.log('Testing PrestaShop connection to:', apiUrl);
-    console.log('Using API key:', prestashopCredentials.apiKey ? `${prestashopCredentials.apiKey.substring(0, 8)}...` : 'NOT SET');
     
     // First, test if the API endpoint is accessible (without auth) - this should return XML
     try {
@@ -1471,9 +1417,6 @@ app.get('/api/prestashop/test', async (req, res) => {
         }
       });
       
-      console.log('API root test response status:', testResponse.status);
-      console.log('Response content type:', testResponse.headers['content-type']);
-      
       // If we get a response (200 = accessible, 401 = needs auth but accessible)
       // PrestaShop API root returns 200 with XML even without auth, or 401 with HTML/login page
       if (testResponse.status === 200 || testResponse.status === 401) {
@@ -1485,8 +1428,6 @@ app.get('/api/prestashop/test', async (req, res) => {
         
         // If 401 with HTML, it means auth is required - skip XML check and test with auth
         if (testResponse.status === 401 && isHTML) {
-          console.log('✓ PrestaShop API is accessible (401 with HTML - authentication required)');
-          
           // Test with authentication using products endpoint
           try {
             const data = await prestashopApiRequest('products?limit=1', 'GET');
@@ -1506,8 +1447,6 @@ app.get('/api/prestashop/test', async (req, res) => {
             throw authError;
           }
         } else if (isXML) {
-          console.log('✓ PrestaShop API is accessible (XML response detected)');
-          
           // Now test with authentication using products endpoint
           // This will use output_format=JSON automatically
           try {
@@ -1703,7 +1642,7 @@ app.post('/api/prestashop/products', async (req, res) => {
         finalCategoryId = 2; // Fallback to Home
       }
     }
-
+    return;
     // Build product data for PrestaShop
     const baseName = offer.name || 'Imported product';
     const slug = prestashopSlug(baseName);
@@ -1991,9 +1930,5 @@ app.get('/log', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Allegro API: ${ALLEGRO_API_URL}`);
-  console.log(`Mode: PRODUCTION`);
-});
+app.listen(PORT);
 
