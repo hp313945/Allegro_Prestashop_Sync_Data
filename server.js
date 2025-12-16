@@ -2014,7 +2014,7 @@ app.post('/api/prestashop/categories', async (req, res) => {
     // Check if category already exists before creating
     const normalizedName = name.trim().toLowerCase();
     let existingCategoryId = categoryCache.get(normalizedName);
-    
+
     // If cache has 'creating' marker, wait a bit and check again
     if (existingCategoryId === 'creating') {
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -2023,11 +2023,35 @@ app.post('/api/prestashop/categories', async (req, res) => {
         existingCategoryId = await findCategoryByName(name);
       }
     }
-    
+
+    // If cache says category exists with a numeric ID, verify it really exists in PrestaShop
+    if (existingCategoryId && existingCategoryId !== 'creating' && !isNaN(existingCategoryId)) {
+      try {
+        await prestashopApiRequest(`categories/${existingCategoryId}`, 'GET');
+        // Category really exists – return it
+        return res.json({
+          success: true,
+          category: { id: existingCategoryId },
+          message: 'Category already exists',
+          existing: true
+        });
+      } catch (verifyError) {
+        // If PrestaShop says 404, the cached ID is stale – remove from cache and continue as "not found"
+        if (verifyError.response?.status === 404) {
+          console.warn(`Cached category "${name}" with ID ${existingCategoryId} no longer exists in PrestaShop. Removing from cache.`);
+          categoryCache.delete(normalizedName);
+          saveCategoryCache();
+          existingCategoryId = null;
+        } else {
+          console.warn('Error verifying cached category in PrestaShop:', verifyError.message);
+        }
+      }
+    }
+
     if (!existingCategoryId || existingCategoryId === 'creating') {
       existingCategoryId = await findCategoryByName(name);
     }
-    
+
     // Only proceed if we have a valid numeric ID (not 'creating' marker)
     if (existingCategoryId && existingCategoryId !== 'creating' && !isNaN(existingCategoryId)) {
       // Category already exists, return the existing one
@@ -2149,7 +2173,7 @@ app.post('/api/prestashop/products', async (req, res) => {
         
         // Check cache first (fastest check)
         let existingCategoryId = categoryCache.get(normalizedCategoryName);
-        
+
         // If cache has 'creating' marker, wait a bit and check again
         if (existingCategoryId === 'creating') {
           // Wait for the other request to finish creating
@@ -2160,12 +2184,28 @@ app.post('/api/prestashop/products', async (req, res) => {
             existingCategoryId = await findCategoryByName(categoryName);
           }
         }
-        
-        // If not in cache or was 'creating', check PrestaShop database
+
+        // If cache says category exists with a numeric ID, verify it really exists in PrestaShop
+        if (existingCategoryId && existingCategoryId !== 'creating' && !isNaN(existingCategoryId)) {
+          try {
+            await prestashopApiRequest(`categories/${existingCategoryId}`, 'GET');
+          } catch (verifyError) {
+            if (verifyError.response?.status === 404) {
+              console.warn(`Cached category "${categoryName}" with ID ${existingCategoryId} no longer exists in PrestaShop. Removing from cache.`);
+              categoryCache.delete(normalizedCategoryName);
+              saveCategoryCache();
+              existingCategoryId = null;
+            } else {
+              console.warn('Error verifying cached category in PrestaShop:', verifyError.message);
+            }
+          }
+        }
+
+        // If not in cache, was 'creating', or cache entry was invalid, check PrestaShop database
         if (!existingCategoryId || existingCategoryId === 'creating') {
           existingCategoryId = await findCategoryByName(categoryName);
         }
-        
+
         // Double-check: if still not found, do one more lookup right before creating
         // This prevents race conditions when multiple products are exported simultaneously
         if (!existingCategoryId || existingCategoryId === 'creating') {
