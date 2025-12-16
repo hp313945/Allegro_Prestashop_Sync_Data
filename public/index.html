@@ -171,7 +171,6 @@
                             <h2>Imported Products <span id="importedCount" class="count-badge">0</span></h2>
                             <div class="section-actions">
                                 <button id="clearImportedBtn" class="btn btn-secondary btn-small" disabled>Clear</button>
-                                <button id="loadPrestashopCategoriesBtn" class="btn btn-primary btn-small" disabled>Load PrestaShop Categories</button>
                                 <button id="exportToPrestashopBtn" class="btn btn-success btn-small" disabled>Export to PrestaShop</button>
                             </div>
                         </div>
@@ -189,10 +188,10 @@
                         <div id="createdList" class="imported-list"></div>
                     </div>
 
-                    <!-- PrestaShop Categories Section -->
-                    <div class="section-card" id="prestashopCategoriesSection" style="display: none;">
+                    <!-- Category Settings Section -->
+                    <div class="section-card" id="prestashopCategoriesSection">
                         <div class="section-header">
-                            <h2>PrestaShop Categories</h2>
+                            <h2>Category Settings</h2>
                             <div class="section-actions">
                                 <label style="display: flex; align-items: center; gap: 10px; font-size: 14px;">
                                     <input type="checkbox" id="autoCreateCategories" checked>
@@ -200,7 +199,10 @@
                                 </label>
                             </div>
                         </div>
-                        <div id="prestashopCategoriesList" class="imported-list"></div>
+                        <p style="padding: 10px 20px; color: #666; font-size: 14px; margin: 0;">
+                            When enabled, categories will be automatically created in PrestaShop if they don't already exist. 
+                            The system checks for duplicates to prevent creating the same category twice.
+                        </p>
                     </div>
                 </main>
             </div>

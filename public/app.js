@@ -19,7 +19,6 @@ let currentPageNumber = 1; // Track current page number
 let currentStatusFilter = 'ALL'; // ALL | ACTIVE | ENDED
 
 // PrestaShop state
-let prestashopCategories = [];
 let prestashopConfigured = false;
 let prestashopAuthorized = false; // Track if PrestaShop connection is successfully tested/authorized
 let createdProducts = []; // Store products created in PrestaShop
@@ -2593,82 +2592,15 @@ async function checkPrestashopStatus() {
     }
 }
 
-async function loadPrestashopCategories() {
-    if (!prestashopConfigured) {
-        showToast('Please configure PrestaShop first', 'error');
-        return;
-    }
-    
-    try {
-        showToast('Loading PrestaShop categories...', 'info');
-        const response = await fetch(`${API_BASE}/api/prestashop/categories`);
-        const data = await response.json();
-        
-        if (data.success && data.categories) {
-            prestashopCategories = data.categories;
-            displayPrestashopCategories();
-            document.getElementById('prestashopCategoriesSection').style.display = 'block';
-            showToast(`Loaded ${prestashopCategories.length} categories`, 'success');
-        } else {
-            showToast(data.error || 'Failed to load categories', 'error');
-        }
-    } catch (error) {
-        showToast('Error loading categories: ' + error.message, 'error');
-    }
-}
-
-function displayPrestashopCategories() {
-    const listEl = document.getElementById('prestashopCategoriesList');
-    if (!listEl) return;
-    
-    if (prestashopCategories.length === 0) {
-        listEl.innerHTML = '<p style="padding: 20px; color: #666;">No categories found</p>';
-        return;
-    }
-    
-    listEl.innerHTML = prestashopCategories.map(cat => {
-        const catData = cat.category || cat;
-        const id = catData.id || cat.id;
-        
-        // Extract category name - PrestaShop returns names as array of language objects
-        let name = 'Unnamed';
-        if (catData.name) {
-            if (Array.isArray(catData.name)) {
-                // Array format: [{ id: 1, value: "Name" }, { id: 2, value: "Name" }]
-                const nameObj = catData.name.find(n => n && (n.value || n)) || catData.name[0];
-                if (nameObj) {
-                    name = nameObj.value || nameObj || 'Unnamed';
-                }
-            } else if (typeof catData.name === 'object') {
-                // Object format: { language: [{ id: 1, value: "Name" }] } or { value: "Name" }
-                if (catData.name.value) {
-                    name = catData.name.value;
-                } else if (catData.name.language && Array.isArray(catData.name.language)) {
-                    const nameObj = catData.name.language[0];
-                    name = nameObj?.value || nameObj || 'Unnamed';
-                }
-            } else if (typeof catData.name === 'string') {
-                name = catData.name;
-            }
-        }
-        
-        return `
-            <div class="imported-item" style="padding: 10px; border-bottom: 1px solid #eee;">
-                <strong>${name}</strong> <span style="color: #666;">(ID: ${id})</span>
-            </div>
-        `;
-    }).join('');
-}
+// Removed loadPrestashopCategories() and displayPrestashopCategories() functions
+// Categories are automatically managed by the backend during export
+// The backend checks for existing categories and creates them if needed
 
 function updateExportButtonState() {
     const exportBtn = document.getElementById('exportToPrestashopBtn');
-    const loadCategoriesBtn = document.getElementById('loadPrestashopCategoriesBtn');
     
     if (exportBtn) {
         exportBtn.disabled = importedOffers.length === 0 || !prestashopConfigured;
-    }
-    if (loadCategoriesBtn) {
-        loadCategoriesBtn.disabled = !prestashopConfigured;
     }
 }
 
