@@ -2114,13 +2114,33 @@ app.post('/api/prestashop/products', async (req, res) => {
         stockAvailableId = stockData.stock_available.id;
       }
       
+      // Ensure stock is at least 1 if it's 0, so product appears in product panel
+      // Products with 0 quantity won't appear unless out_of_stock behavior allows orders
+      const finalStock = parseInt(stock) || 0;
+      const quantityToSet = finalStock > 0 ? finalStock : 1; // Set minimum 1 if stock is 0
+      
       if (stockAvailableId) {
+        // Update existing stock_available
         const stockXml = buildStockAvailableXml({
           id: stockAvailableId,
-          quantity: parseInt(stock),
-          id_product: prestashopProductId
+          quantity: quantityToSet,
+          id_product: prestashopProductId,
+          out_of_stock: finalStock === 0 ? 1 : 2 // Allow orders when stock is 0, deny when stock > 0
         });
         await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', stockXml);
+      } else {
+        // Create new stock_available entry if it doesn't exist
+        const stockXml = buildStockAvailableXml({
+          quantity: quantityToSet,
+          id_product: prestashopProductId,
+          id_product_attribute: 0,
+          id_shop: 1,
+          id_shop_group: 0,
+          depends_on_stock: 0,
+          out_of_stock: finalStock === 0 ? 1 : 2 // Allow orders when stock is 0, deny when stock > 0
+        });
+        const stockResponse = await prestashopApiRequest('stock_availables', 'POST', stockXml);
+        console.log(`Created stock_available entry for product ${prestashopProductId}`);
       }
     } catch (stockError) {
       console.error('Failed to update stock:', stockError.message);
@@ -2289,19 +2309,27 @@ app.put('/api/prestashop/products/:productId/stock', async (req, res) => {
       stockAvailableId = stockData.stock_available.id;
     }
     
-    if (!stockAvailableId) {
-      return res.status(404).json({
-        success: false,
-        error: 'Stock entry not found for this product'
+    if (stockAvailableId) {
+      // Update existing stock_available
+      const stockXml = buildStockAvailableXml({
+        id: stockAvailableId,
+        quantity: parseInt(quantity),
+        id_product: parseInt(productId)
       });
+      await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', stockXml);
+    } else {
+      // Create new stock_available entry if it doesn't exist
+      const stockXml = buildStockAvailableXml({
+        quantity: parseInt(quantity),
+        id_product: parseInt(productId),
+        id_product_attribute: 0,
+        id_shop: 1,
+        id_shop_group: 0,
+        depends_on_stock: 0,
+        out_of_stock: parseInt(quantity) === 0 ? 1 : 2
+      });
+      await prestashopApiRequest('stock_availables', 'POST', stockXml);
     }
-
-    const stockXml = buildStockAvailableXml({
-      id: stockAvailableId,
-      quantity: parseInt(quantity),
-      id_product: parseInt(productId)
-    });
-    await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', stockXml);
 
     res.json({
       success: true,
