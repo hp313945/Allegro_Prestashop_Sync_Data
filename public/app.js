@@ -22,6 +22,7 @@ let currentStatusFilter = 'ALL'; // ALL | ACTIVE | ENDED
 let prestashopCategories = [];
 let prestashopConfigured = false;
 let prestashopAuthorized = false; // Track if PrestaShop connection is successfully tested/authorized
+let createdProducts = []; // Store products created in PrestaShop
 
 // API Base URL
 const API_BASE = '';
@@ -32,6 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     showMainInterface();
     setupEventListeners();
     loadImportedOffers();
+    loadCreatedProducts();
     loadPrestashopConfig();
     checkPrestashopStatus();
     
@@ -364,6 +366,12 @@ function setupEventListeners() {
     // Removed loadCategoriesBtn and clearCategoryBtn - categories load automatically after OAuth
     document.getElementById('clearImportedBtn').addEventListener('click', clearImportedProducts);
     document.getElementById('exportToPrestashopBtn').addEventListener('click', exportToPrestashop);
+    
+    // Created products event listeners
+    const clearCreatedBtn = document.getElementById('clearCreatedBtn');
+    if (clearCreatedBtn) {
+        clearCreatedBtn.addEventListener('click', clearCreatedProducts);
+    }
     
     // PrestaShop event listeners
     const testPrestashopBtn = document.getElementById('testPrestashopBtn');
@@ -2743,6 +2751,129 @@ function loadImportedOffers() {
             console.error('Error loading imported offers:', e);
         }
     }
+}
+
+// Save created products to localStorage
+function saveCreatedProducts() {
+    localStorage.setItem('createdProducts', JSON.stringify(createdProducts));
+}
+
+// Load created products from localStorage
+function loadCreatedProducts() {
+    const saved = localStorage.getItem('createdProducts');
+    if (saved) {
+        try {
+            createdProducts = JSON.parse(saved);
+            displayCreatedProducts();
+        } catch (e) {
+            console.error('Error loading created products:', e);
+        }
+    }
+}
+
+// Display created products
+function displayCreatedProducts() {
+    const createdListEl = document.getElementById('createdList');
+    const createdCountEl = document.getElementById('createdCount');
+    const clearCreatedBtn = document.getElementById('clearCreatedBtn');
+    
+    if (createdCountEl) {
+        createdCountEl.textContent = createdProducts.length;
+    }
+    
+    if (clearCreatedBtn) {
+        clearCreatedBtn.disabled = createdProducts.length === 0;
+    }
+    
+    if (!createdListEl) return;
+    
+    if (createdProducts.length === 0) {
+        createdListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #1a73e8;">No products created yet</p>';
+        return;
+    }
+    
+    createdListEl.innerHTML = createdProducts.map(product => {
+        const productName = product.name || product.details?.name?.[0]?.value || product.details?.name || 'Untitled Product';
+        const shortName = productName.length > 50 ? productName.substring(0, 47) + '...' : productName;
+        const productId = product.prestashopProductId || product.id || 'N/A';
+        const shortId = String(productId).length > 12 ? String(productId).substring(0, 8) + '...' : productId;
+        
+        // Get product image from details if available
+        let mainImage = '';
+        if (product.details) {
+            // PrestaShop product images are typically in associations.images
+            if (product.details.associations?.images?.image) {
+                const images = Array.isArray(product.details.associations.images.image) 
+                    ? product.details.associations.images.image 
+                    : [product.details.associations.images.image];
+                if (images.length > 0) {
+                    // Construct PrestaShop image URL
+                    const imageId = images[0].id;
+                    const baseUrl = prestashopCredentials?.baseUrl || '';
+                    if (baseUrl && imageId) {
+                        mainImage = `${baseUrl.replace(/\/+$/, '')}/img/p/${imageId}.jpg`;
+                    }
+                }
+            }
+        }
+        
+        // Get product price
+        const price = product.details?.price || product.price || 'N/A';
+        const formattedPrice = typeof price === 'number' ? price.toFixed(2) + ' PLN' : price;
+        
+        return `
+        <div class="imported-item" data-product-id="${productId}">
+            <div class="imported-item-image">
+                ${mainImage ? `
+                    <img src="${mainImage}" alt="${escapeHtml(productName)}" class="imported-item-img" 
+                         loading="lazy"
+                         onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                    <div class="imported-item-image-placeholder" style="display: none;">
+                        <span>No Image</span>
+                    </div>
+                ` : `
+                    <div class="imported-item-image-placeholder">
+                        <span>No Image</span>
+                    </div>
+                `}
+            </div>
+            <div class="imported-item-content">
+                <div class="imported-item-title">${escapeHtml(shortName)}</div>
+                <div class="imported-item-id">ID: ${shortId} | Price: ${formattedPrice}</div>
+            </div>
+            <button class="imported-item-remove" onclick="removeCreatedProduct('${productId}')" title="Remove product">
+                <span>×</span>
+            </button>
+        </div>
+    `;
+    }).join('');
+}
+
+// Remove created product
+function removeCreatedProduct(productId) {
+    createdProducts = createdProducts.filter(product => {
+        const id = product.prestashopProductId || product.id;
+        return String(id) !== String(productId);
+    });
+    saveCreatedProducts();
+    displayCreatedProducts();
+    showToast('Product removed from created list', 'success');
+}
+
+// Clear all created products
+function clearCreatedProducts() {
+    if (createdProducts.length === 0) {
+        return;
+    }
+    
+    if (!confirm(`Clear all ${createdProducts.length} created product(s)?`)) {
+        return;
+    }
+    
+    createdProducts = [];
+    saveCreatedProducts();
+    displayCreatedProducts();
+    showToast('All created products cleared', 'success');
 }
 
 // Save offers and categories to localStorage for persistence across refresh

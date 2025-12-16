@@ -675,6 +675,10 @@ function buildProductXml(product) {
     ${linkRewriteXml}
     <price>${xmlEscape(product.price)}</price>
     <active>${xmlEscape(product.active)}</active>
+    <visibility>${xmlEscape(product.visibility !== undefined ? product.visibility : 'both')}</visibility>
+    <available_for_order>${xmlEscape(product.available_for_order !== undefined ? product.available_for_order : 1)}</available_for_order>
+    <show_price>${xmlEscape(product.show_price !== undefined ? product.show_price : 1)}</show_price>
+    <indexed>${xmlEscape(product.indexed !== undefined ? product.indexed : 1)}</indexed>
     ${categoriesXml}
   </product>
 </prestashop>`;
@@ -1697,6 +1701,119 @@ app.get('/api/prestashop/test', async (req, res) => {
 });
 
 /**
+ * Find existing category by name in PrestaShop
+ * Returns category ID if found, null otherwise
+ */
+async function findCategoryByName(categoryName) {
+  try {
+    // Fetch all categories (with a reasonable limit)
+    const data = await prestashopApiRequest('categories?limit=1000', 'GET');
+    
+    // PrestaShop returns categories in format: { categories: [{ category: {...} }] } or { category: {...} }
+    let categories = [];
+    if (data.categories) {
+      if (Array.isArray(data.categories)) {
+        categories = data.categories.map(item => item.category || item);
+      } else if (data.categories.category) {
+        categories = Array.isArray(data.categories.category) 
+          ? data.categories.category 
+          : [data.categories.category];
+      }
+    } else if (data.category) {
+      categories = Array.isArray(data.category) ? data.category : [data.category];
+    }
+    
+    // Search for category with matching name
+    // PrestaShop category names are stored as arrays: [{ id: 1, value: "Name PL" }, { id: 2, value: "Name EN" }]
+    for (const category of categories) {
+      if (category.name) {
+        // Handle both array format and object format
+        const nameArray = Array.isArray(category.name) ? category.name : 
+                         (category.name.language ? [category.name.language] : []);
+        
+        // Check if any language version matches the category name
+        for (const nameEntry of nameArray) {
+          const nameValue = nameEntry.value || nameEntry;
+          if (nameValue && nameValue.trim().toLowerCase() === categoryName.trim().toLowerCase()) {
+            return category.id || category.category?.id;
+          }
+        }
+      }
+    }
+    
+    return null; // Category not found
+  } catch (error) {
+    console.error('Error finding category by name:', error.message);
+    return null; // Return null on error to allow creation to proceed
+  }
+}
+
+/**
+ * Find existing product by reference (Allegro offer ID) in PrestaShop
+ * Returns product ID if found, null otherwise
+ */
+async function findProductByReference(reference) {
+  try {
+    // First check if we have a mapping for this reference
+    if (productMappings[reference]) {
+      const mapping = productMappings[reference];
+      const existingProductId = mapping.prestashopProductId;
+      
+      // Verify the product still exists in PrestaShop
+      try {
+        await prestashopApiRequest(`products/${existingProductId}`, 'GET');
+        return existingProductId; // Product exists, return its ID
+      } catch (verifyError) {
+        // Product doesn't exist anymore, remove from mapping
+        delete productMappings[reference];
+        saveProductMappings();
+      }
+    }
+    
+    // If no mapping or product doesn't exist, search PrestaShop by reference
+    // PrestaShop API allows filtering by reference
+    const encodedReference = encodeURIComponent(reference);
+    const data = await prestashopApiRequest(`products?filter[reference]=[${encodedReference}]&limit=1`, 'GET');
+    
+    // PrestaShop returns products in format: { products: [{ product: {...} }] } or { product: {...} }
+    let products = [];
+    if (data.products) {
+      if (Array.isArray(data.products)) {
+        products = data.products.map(item => item.product || item);
+      } else if (data.products.product) {
+        products = Array.isArray(data.products.product) 
+          ? data.products.product 
+          : [data.products.product];
+      }
+    } else if (data.product) {
+      products = Array.isArray(data.product) ? data.product : [data.product];
+    }
+    
+    // Find product with matching reference
+    for (const product of products) {
+      if (product.reference && product.reference.toString() === reference.toString()) {
+        const productId = product.id || product.product?.id;
+        if (productId) {
+          // Update mapping for future lookups
+          productMappings[reference] = {
+            prestashopProductId: productId,
+            allegroOfferId: reference,
+            syncedAt: new Date().toISOString()
+          };
+          saveProductMappings();
+          return productId;
+        }
+      }
+    }
+    
+    return null; // Product not found
+  } catch (error) {
+    console.error('Error finding product by reference:', error.message);
+    return null; // Return null on error to allow creation to proceed
+  }
+}
+
+/**
  * Get PrestaShop categories
  */
 app.get('/api/prestashop/categories', async (req, res) => {
@@ -1827,47 +1944,59 @@ app.post('/api/prestashop/products', async (req, res) => {
         // Use real category name from available source, fallback to default if not available
         categoryName = categoryName || allegroCategory?.name || 'Imported Category';
         
-        // Build category description from available Allegro category data
-        let categoryDescription = '';
-        if (categoryName && categoryName !== 'Imported Category') {
-          categoryDescription = `Category imported from Allegro: ${categoryName}`;
-          if (allegroCategory && allegroCategory.leaf !== undefined) {
-            categoryDescription += ` (${allegroCategory.leaf ? 'Leaf category' : 'Parent category'})`;
+        // Check if category already exists in PrestaShop before creating
+        const existingCategoryId = await findCategoryByName(categoryName);
+        let isNewCategory = false;
+        
+        if (existingCategoryId) {
+          // Category already exists, use the existing one
+          finalCategoryId = existingCategoryId;
+          console.log(`Category "${categoryName}" already exists in PrestaShop (ID: ${finalCategoryId}), using existing category`);
+        } else {
+          // Category doesn't exist, create it
+          isNewCategory = true;
+          // Build category description from available Allegro category data
+          let categoryDescription = '';
+          if (categoryName && categoryName !== 'Imported Category') {
+            categoryDescription = `Category imported from Allegro: ${categoryName}`;
+            if (allegroCategory && allegroCategory.leaf !== undefined) {
+              categoryDescription += ` (${allegroCategory.leaf ? 'Leaf category' : 'Parent category'})`;
+            }
+            if (allegroCategory && allegroCategory.tree && allegroCategory.tree.name) {
+              categoryDescription += ` - Tree: ${allegroCategory.tree.name}`;
+            }
           }
-          if (allegroCategory && allegroCategory.tree && allegroCategory.tree.name) {
-            categoryDescription += ` - Tree: ${allegroCategory.tree.name}`;
+          
+          // Build category XML with real category information
+          const categoryData = {
+            name: [
+              { id: 1, value: categoryName },
+              { id: 2, value: categoryName }
+            ],
+            id_parent: 2,
+            active: 1,
+            link_rewrite: [
+              { id: 1, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') },
+              { id: 2, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') }
+            ]
+          };
+          
+          // Add description if available
+          if (categoryDescription) {
+            categoryData.description = [
+              { id: 1, value: categoryDescription },
+              { id: 2, value: categoryDescription }
+            ];
           }
+          const categoryXml = buildCategoryXml(categoryData);
+          const categoryRes = await prestashopApiRequest('categories', 'POST', categoryXml);
+          finalCategoryId = categoryRes.category?.id || categoryRes.id || 2;
+          
+          console.log(`Created new category "${categoryName}" (ID: ${finalCategoryId}) from Allegro category ID: ${offer.category.id}`);
         }
         
-        // Build category XML with real category information
-        const categoryData = {
-          name: [
-            { id: 1, value: categoryName },
-            { id: 2, value: categoryName }
-          ],
-          id_parent: 2,
-          active: 1,
-          link_rewrite: [
-            { id: 1, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') },
-            { id: 2, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') }
-          ]
-        };
-        
-        // Add description if available
-        if (categoryDescription) {
-          categoryData.description = [
-            { id: 1, value: categoryDescription },
-            { id: 2, value: categoryDescription }
-          ];
-        }
-        const categoryXml = buildCategoryXml(categoryData);
-        const categoryRes = await prestashopApiRequest('categories', 'POST', categoryXml);
-        finalCategoryId = categoryRes.category?.id || categoryRes.id || 2;
-        
-        console.log(`Created category "${categoryName}" (ID: ${finalCategoryId}) from Allegro category ID: ${offer.category.id}`);
-        
-        // Handle category image if Allegro provides it
-        if (allegroCategory && (allegroCategory.image || allegroCategory.imageUrl || allegroCategory.photo)) {
+        // Handle category image if Allegro provides it (only for newly created categories)
+        if (isNewCategory && allegroCategory && (allegroCategory.image || allegroCategory.imageUrl || allegroCategory.photo)) {
           try {
             const categoryImageUrl = allegroCategory.image || allegroCategory.imageUrl || allegroCategory.photo;
             console.log(`Downloading category image from: ${categoryImageUrl}`);
@@ -1893,61 +2022,80 @@ app.post('/api/prestashop/products', async (req, res) => {
         finalCategoryId = 2; // Fallback to Home
       }
     }
-    // Build product data for PrestaShop
-    const baseName = offer.name || 'Imported product';
-    const slug = prestashopSlug(baseName);
-
-    const productData = {
-      id_shop_default: 1,
-      id_category_default: finalCategoryId,
-      id_tax_rules_group: 0,
-      reference: offer.id.toString(),
-      name: [
-        { id: 1, value: baseName }, // Language 1
-        { id: 2, value: baseName }  // Language 2
-      ],
-      description: [
-        { id: 1, value: description },
-        { id: 2, value: description }
-      ],
-      description_short: [
-        { 
-          id: 1, 
-          value: shortDescription || extractShortDescription(description, 800)
-        },
-        { 
-          id: 2, 
-          value: shortDescription || extractShortDescription(description, 800)
-        }
-      ],
-      link_rewrite: [
-        { id: 1, value: slug },
-        { id: 2, value: slug }
-      ],
-      price: parseFloat(price),
-      active: 1,
-      associations: {
-        categories: {
-          category: [{ id: finalCategoryId }]
-        }
-      }
-    };
-
-  // Create product (send XML body)
-  const productXml = buildProductXml(productData);
-  const productResponse = await prestashopApiRequest('products', 'POST', productXml);
-    // PrestaShop returns: { product: { id: ... } } or { id: ... }
-    let prestashopProductId = null;
-    if (productResponse.product) {
-      prestashopProductId = productResponse.product.id;
-    } else if (productResponse.id) {
-      prestashopProductId = productResponse.id;
-    } else if (Array.isArray(productResponse) && productResponse.length > 0) {
-      prestashopProductId = productResponse[0].id || productResponse[0].product?.id;
-    }
     
-    if (!prestashopProductId) {
-      throw new Error('Failed to create product - no product ID returned');
+    // Check if product already exists in PrestaShop before creating
+    const existingProductId = await findProductByReference(offer.id.toString());
+    let prestashopProductId = null;
+    let isNewProduct = false;
+    
+    if (existingProductId) {
+      // Product already exists, use the existing one
+      prestashopProductId = existingProductId;
+      console.log(`Product with reference "${offer.id}" already exists in PrestaShop (ID: ${prestashopProductId}), using existing product`);
+    } else {
+      // Product doesn't exist, create it
+      isNewProduct = true;
+      // Build product data for PrestaShop
+      const baseName = offer.name || 'Imported product';
+      const slug = prestashopSlug(baseName);
+
+      const productData = {
+        id_shop_default: 1,
+        id_category_default: finalCategoryId,
+        id_tax_rules_group: 0,
+        reference: offer.id.toString(),
+        name: [
+          { id: 1, value: baseName }, // Language 1
+          { id: 2, value: baseName }  // Language 2
+        ],
+        description: [
+          { id: 1, value: description },
+          { id: 2, value: description }
+        ],
+        description_short: [
+          { 
+            id: 1, 
+            value: shortDescription || extractShortDescription(description, 800)
+          },
+          { 
+            id: 2, 
+            value: shortDescription || extractShortDescription(description, 800)
+          }
+        ],
+        link_rewrite: [
+          { id: 1, value: slug },
+          { id: 2, value: slug }
+        ],
+        price: parseFloat(price),
+        active: 1,
+        visibility: 'both', // 'both' = visible in catalog and search, 'catalog' = catalog only, 'search' = search only, 'none' = not visible
+        available_for_order: 1, // Allow customers to order this product
+        show_price: 1, // Show price on product page
+        indexed: 1, // Index product for search
+        associations: {
+          categories: {
+            category: [{ id: finalCategoryId }]
+          }
+        }
+      };
+
+      // Create product (send XML body)
+      const productXml = buildProductXml(productData);
+      const productResponse = await prestashopApiRequest('products', 'POST', productXml);
+      // PrestaShop returns: { product: { id: ... } } or { id: ... }
+      if (productResponse.product) {
+        prestashopProductId = productResponse.product.id;
+      } else if (productResponse.id) {
+        prestashopProductId = productResponse.id;
+      } else if (Array.isArray(productResponse) && productResponse.length > 0) {
+        prestashopProductId = productResponse[0].id || productResponse[0].product?.id;
+      }
+      
+      if (!prestashopProductId) {
+        throw new Error('Failed to create product - no product ID returned');
+      }
+      
+      console.log(`Created new product "${baseName}" (ID: ${prestashopProductId}) from Allegro offer ID: ${offer.id}`);
     }
 
     // Update stock
@@ -1979,7 +2127,7 @@ app.post('/api/prestashop/products', async (req, res) => {
       // Continue even if stock update fails
     }
 
-    // Handle images - upload to PrestaShop
+    // Handle images - upload to PrestaShop (only for newly created products)
     let uploadedImages = [];
     let imageUrls = [];
     
@@ -1992,8 +2140,8 @@ app.post('/api/prestashop/products', async (req, res) => {
       ).filter(url => url);
     }
     
-    // Upload images to PrestaShop (up to 5 images)
-    if (imageUrls.length > 0 && prestashopProductId) {
+    // Upload images to PrestaShop (up to 5 images) - only for newly created products
+    if (isNewProduct && imageUrls.length > 0 && prestashopProductId) {
       for (let i = 0; i < Math.min(imageUrls.length, 5); i++) {
         try {
           const imageUrl = imageUrls[i];
@@ -2032,19 +2180,77 @@ app.post('/api/prestashop/products', async (req, res) => {
     };
     saveProductMappings();
 
+    // Fetch full product details from PrestaShop to return to frontend
+    let fullProductDetails = null;
+    try {
+      const productData = await prestashopApiRequest(`products/${prestashopProductId}`, 'GET');
+      // PrestaShop returns: { product: {...} } or { products: [{ product: {...} }] }
+      if (productData.product) {
+        fullProductDetails = productData.product;
+      } else if (productData.products && Array.isArray(productData.products) && productData.products.length > 0) {
+        fullProductDetails = productData.products[0].product || productData.products[0];
+      } else if (productData.id) {
+        fullProductDetails = productData;
+      }
+    } catch (fetchError) {
+      console.error('Failed to fetch full product details:', fetchError.message);
+      // Continue even if fetching full details fails - we still have the product ID
+    }
+
     res.json({
       success: true,
       product: {
         id: prestashopProductId,
         prestashopProductId: prestashopProductId,
-        allegroOfferId: offer.id
+        allegroOfferId: offer.id,
+        ...(fullProductDetails ? { details: fullProductDetails } : {})
       },
       images: {
         urls: imageUrls,
         uploaded: uploadedImages.length,
         total: imageUrls.length
       },
-      message: `Product created successfully in PrestaShop${uploadedImages.length > 0 ? ` with ${uploadedImages.length} image(s)` : ''}`
+      message: isNewProduct 
+        ? `Product created successfully in PrestaShop${uploadedImages.length > 0 ? ` with ${uploadedImages.length} image(s)` : ''}`
+        : `Product already exists in PrestaShop (ID: ${prestashopProductId}). Stock updated.`
+    });
+  } catch (error) {
+    res.status(error.response?.status || 500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Get PrestaShop product by ID
+ */
+app.get('/api/prestashop/products/:productId', async (req, res) => {
+  try {
+    const { productId } = req.params;
+    
+    const data = await prestashopApiRequest(`products/${productId}`, 'GET');
+    
+    // PrestaShop returns: { product: {...} } or { products: [{ product: {...} }] }
+    let product = null;
+    if (data.product) {
+      product = data.product;
+    } else if (data.products && Array.isArray(data.products) && data.products.length > 0) {
+      product = data.products[0].product || data.products[0];
+    } else if (data.id) {
+      product = data;
+    }
+    
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        error: 'Product not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      product: product
     });
   } catch (error) {
     res.status(error.response?.status || 500).json({
