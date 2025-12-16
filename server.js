@@ -14,6 +14,7 @@ const TOKEN_STORAGE_FILE = path.join(__dirname, '.tokens.json');
 const CREDENTIALS_STORAGE_FILE = path.join(__dirname, '.credentials.json');
 const PRESTASHOP_CREDENTIALS_FILE = path.join(__dirname, '.prestashop.json');
 const PRODUCT_MAPPINGS_FILE = path.join(__dirname, '.product_mappings.json');
+const CATEGORY_CACHE_FILE = path.join(__dirname, '.category_cache.json');
 
 // Middleware
 app.use(cors());
@@ -99,7 +100,7 @@ let tokenExpiry = null;
 
 // Category cache to prevent duplicate creation during export sessions
 // Maps category name (lowercase) to category ID
-const categoryCache = new Map();
+let categoryCache = new Map();
 
 // Store user OAuth tokens (for user-level authentication)
 let userOAuthTokens = {
@@ -269,11 +270,67 @@ function loadProductMappings() {
   }
 }
 
+/**
+ * Save category cache to file (persistent storage)
+ */
+function saveCategoryCache() {
+  try {
+    // Convert Map to plain object for JSON serialization
+    const cacheObject = {};
+    categoryCache.forEach((value, key) => {
+      // Only save valid category IDs, not 'creating' markers
+      if (value !== 'creating' && !isNaN(value)) {
+        cacheObject[key] = value;
+      }
+    });
+    const cacheData = {
+      categories: cacheObject,
+      savedAt: new Date().toISOString()
+    };
+    fs.writeFileSync(CATEGORY_CACHE_FILE, JSON.stringify(cacheData, null, 2), 'utf8');
+  } catch (error) {
+    console.error('Error saving category cache:', error.message);
+  }
+}
+
+/**
+ * Load category cache from file (on server startup)
+ */
+function loadCategoryCache() {
+  try {
+    if (fs.existsSync(CATEGORY_CACHE_FILE)) {
+      const cacheData = JSON.parse(fs.readFileSync(CATEGORY_CACHE_FILE, 'utf8'));
+      if (cacheData.categories) {
+        categoryCache = new Map(Object.entries(cacheData.categories));
+        console.log(`Loaded ${categoryCache.size} categories from cache`);
+      }
+    }
+  } catch (error) {
+    console.error('Error loading category cache:', error.message);
+    categoryCache = new Map();
+  }
+}
+
+/**
+ * Update category cache and save to file
+ * Only saves valid category IDs (not 'creating' markers)
+ */
+function updateCategoryCache(normalizedName, categoryId) {
+  if (categoryId && categoryId !== 'creating' && !isNaN(categoryId)) {
+    categoryCache.set(normalizedName, categoryId);
+    saveCategoryCache();
+  } else if (categoryId === 'creating') {
+    // Allow 'creating' marker but don't save it
+    categoryCache.set(normalizedName, categoryId);
+  }
+}
+
 // Load tokens and credentials on server startup
 loadCredentials();
 loadTokens();
 loadPrestashopCredentials();
 loadProductMappings();
+loadCategoryCache();
 
 // Store visitor logs (in-memory storage)
 // In production, use proper database storage
@@ -1737,6 +1794,10 @@ async function findCategoryByName(categoryName) {
       }
     }
     
+    // Cache miss or 'creating' marker - always check database to ensure we find existing categories
+    // This is especially important after server restarts when cache is empty
+    console.log(`Checking database for category "${categoryName}"...`);
+    
     // Fetch all categories (with pagination support)
     let allCategories = [];
     let limit = 1000;
@@ -1824,7 +1885,7 @@ async function findCategoryByName(categoryName) {
             const categoryId = category.id || category.category?.id;
             // Cache the result for future lookups
             if (categoryId) {
-              categoryCache.set(normalizedName, categoryId);
+              updateCategoryCache(normalizedName, categoryId);
             }
             return categoryId;
           }
@@ -1998,7 +2059,7 @@ app.post('/api/prestashop/categories', async (req, res) => {
     const finalCheck = await findCategoryByName(name);
     if (finalCheck && finalCheck !== 'creating' && !isNaN(finalCheck)) {
       // Category was created by another request while we were preparing
-      categoryCache.set(normalizedName, finalCheck);
+      updateCategoryCache(normalizedName, finalCheck);
       return res.json({
         success: true,
         category: { id: finalCheck },
@@ -2013,7 +2074,7 @@ app.post('/api/prestashop/categories', async (req, res) => {
     
     // Update cache with the actual category ID
     if (newCategoryId) {
-      categoryCache.set(normalizedName, newCategoryId);
+      updateCategoryCache(normalizedName, newCategoryId);
     }
     
     res.json({
@@ -2121,13 +2182,13 @@ app.post('/api/prestashop/products', async (req, res) => {
           // Category already exists, use the existing one
           finalCategoryId = existingCategoryId;
           // Ensure it's in cache
-          categoryCache.set(normalizedCategoryName, existingCategoryId);
+          updateCategoryCache(normalizedCategoryName, existingCategoryId);
           console.log(`Category "${categoryName}" already exists in PrestaShop (ID: ${finalCategoryId}), using existing category`);
         } else {
           // Category doesn't exist, create it
           // Mark in cache immediately to prevent concurrent creation
           // We'll update with the actual ID after creation
-          categoryCache.set(normalizedCategoryName, 'creating');
+          updateCategoryCache(normalizedCategoryName, 'creating');
           isNewCategory = true;
           // Build category description from available Allegro category data
           let categoryDescription = '';
@@ -2160,7 +2221,7 @@ app.post('/api/prestashop/products', async (req, res) => {
           if (finalCheck && finalCheck !== 'creating' && !isNaN(finalCheck)) {
             // Category was created by another request while we were preparing
             finalCategoryId = finalCheck;
-            categoryCache.set(normalizedCategoryName, finalCategoryId);
+            updateCategoryCache(normalizedCategoryName, finalCategoryId);
             console.log(`Category "${categoryName}" was created by another request (ID: ${finalCategoryId}), using existing category`);
             isNewCategory = false;
           } else {
@@ -2177,7 +2238,7 @@ app.post('/api/prestashop/products', async (req, res) => {
             finalCategoryId = categoryRes.category?.id || categoryRes.id || 2;
             
             // Update cache with the actual category ID
-            categoryCache.set(normalizedCategoryName, finalCategoryId);
+            updateCategoryCache(normalizedCategoryName, finalCategoryId);
             
             console.log(`Created new category "${categoryName}" (ID: ${finalCategoryId}) from Allegro category ID: ${offer.category.id}`);
           }
