@@ -1686,7 +1686,6 @@ app.post('/api/prestashop/products', async (req, res) => {
             { id: 2, value: categoryDescription }
           ];
         }
-        console.log(categoryData, '=====================================');
         const categoryXml = buildCategoryXml(categoryData);
         const categoryRes = await prestashopApiRequest('categories', 'POST', categoryXml);
         finalCategoryId = categoryRes.category?.id || categoryRes.id || 2;
@@ -1703,7 +1702,6 @@ app.post('/api/prestashop/products', async (req, res) => {
         finalCategoryId = 2; // Fallback to Home
       }
     }
-    return;
     // Build product data for PrestaShop
     const baseName = offer.name || 'Imported product';
     const slug = prestashopSlug(baseName);
@@ -1737,6 +1735,8 @@ app.post('/api/prestashop/products', async (req, res) => {
         }
       }
     };
+    console.log(productData,offer.name, 'productData=====================================');
+    return;
 
   // Create product (send XML body)
   const productXml = buildProductXml(productData);
