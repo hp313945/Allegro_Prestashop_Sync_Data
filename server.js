@@ -1716,8 +1716,17 @@ async function findCategoryByName(categoryName) {
     // First check the in-memory cache
     if (categoryCache.has(normalizedName)) {
       const cachedId = categoryCache.get(normalizedName);
-      console.log(`Category "${categoryName}" found in cache (ID: ${cachedId})`);
-      return cachedId;
+      // If cache has 'creating' marker, don't return it - wait and check database instead
+      if (cachedId === 'creating') {
+        console.log(`Category "${categoryName}" is being created, waiting and checking database...`);
+        // Wait a bit for the creation to complete
+        await new Promise(resolve => setTimeout(resolve, 500));
+        // Don't return 'creating', continue to database check below
+      } else if (cachedId && cachedId !== 'creating' && !isNaN(cachedId)) {
+        // Valid category ID found in cache
+        console.log(`Category "${categoryName}" found in cache (ID: ${cachedId})`);
+        return cachedId;
+      }
     }
     
     // Fetch all categories (with pagination support)
@@ -1762,13 +1771,31 @@ async function findCategoryByName(categoryName) {
     for (const category of allCategories) {
       if (category.name) {
         // Handle both array format and object format
-        const nameArray = Array.isArray(category.name) ? category.name : 
-                         (category.name.language ? [category.name.language] : []);
+        let nameArray = [];
+        if (Array.isArray(category.name)) {
+          nameArray = category.name;
+        } else if (category.name.language && Array.isArray(category.name.language)) {
+          nameArray = category.name.language;
+        } else if (category.name.language) {
+          nameArray = [category.name.language];
+        } else if (typeof category.name === 'object' && category.name.value) {
+          nameArray = [category.name];
+        } else if (typeof category.name === 'string') {
+          // Direct string name
+          if (category.name.trim().toLowerCase() === normalizedName) {
+            const categoryId = category.id || category.category?.id;
+            if (categoryId) {
+              categoryCache.set(normalizedName, categoryId);
+            }
+            return categoryId;
+          }
+        }
         
         // Check if any language version matches the category name
         for (const nameEntry of nameArray) {
-          const nameValue = nameEntry.value || nameEntry;
-          if (nameValue && nameValue.trim().toLowerCase() === normalizedName) {
+          if (!nameEntry) continue;
+          const nameValue = nameEntry.value || (typeof nameEntry === 'string' ? nameEntry : null);
+          if (nameValue && typeof nameValue === 'string' && nameValue.trim().toLowerCase() === normalizedName) {
             const categoryId = category.id || category.category?.id;
             // Cache the result for future lookups
             if (categoryId) {

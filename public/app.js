@@ -2629,9 +2629,28 @@ function displayPrestashopCategories() {
     listEl.innerHTML = prestashopCategories.map(cat => {
         const catData = cat.category || cat;
         const id = catData.id || cat.id;
-        const name = (catData.name && Array.isArray(catData.name)) 
-            ? catData.name[0]?.value || catData.name[0] || 'Unnamed'
-            : (catData.name || 'Unnamed');
+        
+        // Extract category name - PrestaShop returns names as array of language objects
+        let name = 'Unnamed';
+        if (catData.name) {
+            if (Array.isArray(catData.name)) {
+                // Array format: [{ id: 1, value: "Name" }, { id: 2, value: "Name" }]
+                const nameObj = catData.name.find(n => n && (n.value || n)) || catData.name[0];
+                if (nameObj) {
+                    name = nameObj.value || nameObj || 'Unnamed';
+                }
+            } else if (typeof catData.name === 'object') {
+                // Object format: { language: [{ id: 1, value: "Name" }] } or { value: "Name" }
+                if (catData.name.value) {
+                    name = catData.name.value;
+                } else if (catData.name.language && Array.isArray(catData.name.language)) {
+                    const nameObj = catData.name.language[0];
+                    name = nameObj?.value || nameObj || 'Unnamed';
+                }
+            } else if (typeof catData.name === 'string') {
+                name = catData.name;
+            }
+        }
         
         return `
             <div class="imported-item" style="padding: 10px; border-bottom: 1px solid #eee;">
