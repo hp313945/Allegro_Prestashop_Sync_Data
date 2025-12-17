@@ -726,6 +726,11 @@ function buildLocalizedFieldXml(tagName, items) {
 
 /**
  * Build XML body for a PrestaShop product
+ *
+ * NOTE:
+ * - We only send fields that are safe for Webservice product creation.
+ * - All "boolean" style flags are always sent as 0/1, never true/false/null.
+ * - Optional fields are either omitted or converted to empty strings.
  */
 function buildProductXml(product) {
   const nameXml = buildLocalizedFieldXml('name', product.name);
@@ -759,6 +764,14 @@ function buildProductXml(product) {
     <available_for_order>${xmlEscape(product.available_for_order !== undefined ? product.available_for_order : 1)}</available_for_order>
     <show_price>${xmlEscape(product.show_price !== undefined ? product.show_price : 1)}</show_price>
     <indexed>${xmlEscape(product.indexed !== undefined ? product.indexed : 1)}</indexed>
+    <manufacturer_name>${xmlEscape(product.manufacturer_name || '')}</manufacturer_name>
+    <on_sale>${xmlEscape(product.on_sale !== undefined ? product.on_sale : 0)}</on_sale>
+    <online_only>${xmlEscape(product.online_only !== undefined ? product.online_only : 0)}</online_only>
+    <is_virtual>${xmlEscape(product.is_virtual !== undefined ? product.is_virtual : 0)}</is_virtual>
+    <advanced_stock_management>${xmlEscape(
+      product.advanced_stock_management !== undefined ? product.advanced_stock_management : 0
+    )}</advanced_stock_management>
+    <condition>${xmlEscape(product.condition !== undefined ? product.condition : 'new')}</condition>
     ${categoriesXml}
   </product>
 </prestashop>`;
@@ -884,6 +897,50 @@ async function prestashopApiRequest(endpoint, method = 'GET', data = null) {
     
     // Check for error status codes
     if (response.status >= 400) {
+      /**
+       * PrestaShop quirk:
+       * ------------------
+       * When debug mode is enabled, some non‑fatal PHP notices are returned
+       * as 500 responses from the Webservice, BUT the product/category is
+       * actually created and a valid payload is returned, e.g.:
+       *
+       * {
+       *   product: { id: "103", ... },
+       *   errors: [
+       *     {
+       *       code: 5,
+       *       message: "[PHP Notice #8] Trying to access array offset on value of type bool (...)"
+       *     }
+       *   ]
+       * }
+       *
+       * This causes the importer to think the operation failed and skip
+       * image uploads, even though the product exists in PrestaShop.
+       *
+       * To make the importer robust, we treat this very specific case as
+       * a successful response and just log a warning, so the flow can
+       * continue (stock + images).
+       */
+      const data = response.data;
+      const isPhpNotice500 =
+        response.status === 500 &&
+        data &&
+        data.product &&
+        Array.isArray(data.errors) &&
+        data.errors.length > 0 &&
+        data.errors.every(e =>
+          String(e.message || '').includes('Trying to access array offset on value of type bool')
+        );
+
+      if (isPhpNotice500) {
+        console.warn('PrestaShop returned 500 with PHP notice but product was created. Treating as success.', {
+          url: config.url,
+          productId: data.product.id,
+          errors: data.errors
+        });
+        return data;
+      }
+
       const error = new Error(`PrestaShop API returned status ${response.status}`);
       error.response = response;
       error.config = config; // Attach config so we can see the URL in error messages
@@ -2273,45 +2330,66 @@ app.post('/api/prestashop/products', async (req, res) => {
       isNewProduct = true;
       // Build product data for PrestaShop
       const baseName = offer.name || 'Imported product';
+      const manufacturerName =
+        (offer.producer && String(offer.producer).trim()) ||
+        (offer.manufacturer && String(offer.manufacturer).trim()) ||
+        '';
       const slug = prestashopSlug(baseName);
 
       const productData = {
-        id_shop_default: 1,
-        id_category_default: finalCategoryId,
-        id_tax_rules_group: 0,
+        // Core identifiers / defaults
+        id_shop_default: '1',
+        id_category_default: String(finalCategoryId),
+        id_tax_rules_group: '0',
         reference: offer.id.toString(),
+
+        // Localized fields (match PrestaShop JSON <-> XML model)
         name: [
-          { id: 1, value: baseName }, // Language 1
-          { id: 2, value: baseName }  // Language 2
+          { id: '1', value: baseName },
+          { id: '2', value: baseName }
         ],
         description: [
-          { id: 1, value: description },
-          { id: 2, value: description }
+          { id: '1', value: description },
+          { id: '2', value: description }
         ],
         description_short: [
-          { 
-            id: 1, 
+          {
+            id: '1',
             value: shortDescription || extractShortDescription(description, 800)
           },
-          { 
-            id: 2, 
+          {
+            id: '2',
             value: shortDescription || extractShortDescription(description, 800)
           }
         ],
         link_rewrite: [
-          { id: 1, value: slug },
-          { id: 2, value: slug }
+          { id: '1', value: slug },
+          { id: '2', value: slug }
         ],
-        price: parseFloat(price),
-        active: 1,
-        state: 1, // Required for product to appear in admin grid (ps_product_shop.state = 1)
-        visibility: 'both', // 'both' = visible in catalog and search, 'catalog' = catalog only, 'search' = search only, 'none' = not visible
-        available_for_order: 1, // Allow customers to order this product
-        show_price: 1, // Show price on product page
-        indexed: 1, // Index product for search
+
+        // Scalars as strings (as in PrestaShop JSON)
+        price: isNaN(Number(price)) ? '0.00' : Number(price).toFixed(2),
+
+        // Flags must be 0/1 as strings, never booleans/null
+        active: '1',
+        state: '1', // ps_product_shop.state = 1
+        visibility: 'both',
+        available_for_order: '1',
+        show_price: '1',
+        indexed: '1',
+
+        // Extra safe defaults to match PrestaShop expectations
+        manufacturer_name: manufacturerName,
+        on_sale: '0',
+        online_only: '0',
+        is_virtual: '0',
+        advanced_stock_management: '0',
+        condition: 'new',
+
+        // Category associations
         associations: {
           categories: {
-            category: [{ id: finalCategoryId }]
+            category: [{ id: String(finalCategoryId) }]
           }
         }
       };
