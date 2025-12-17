@@ -341,6 +341,24 @@ function setupEventListeners() {
             displayOffersPage();
         });
     }
+
+    // Offer search bar (client-side filtering by offer name / id / external id)
+    const offerSearchInput = document.getElementById('offerSearchInput');
+    if (offerSearchInput) {
+        offerSearchInput.addEventListener('input', () => {
+            // Store lowercase phrase for easier comparisons
+            currentPhrase = (offerSearchInput.value || '').trim().toLowerCase();
+
+            // Reset pagination when search changes
+            currentOffset = 0;
+            currentPageNumber = 1;
+            pageHistory = [];
+            totalProductsSeen = 0;
+
+            // Re-render current offers (search is applied in getOffersFilteredByStatus)
+            displayOffersPage();
+        });
+    }
     
     // Product count is fixed (30 per page), so no selector or change handler needed
     document.getElementById('importSelectedBtn').addEventListener('click', importSelected);
@@ -1415,13 +1433,31 @@ async function displayOffers(offers) {
     }
 }
 
-// Get offers filtered by current status (ALL / ACTIVE / ENDED)
+// Get offers filtered by current search phrase and status (ALL / ACTIVE / ENDED)
 function getOffersFilteredByStatus() {
+    let offers = currentOffers || [];
+
+    // Apply client-side search by name / title / id / external id
+    if (currentPhrase && typeof currentPhrase === 'string' && currentPhrase.trim() !== '') {
+        const phrase = currentPhrase.trim().toLowerCase();
+        offers = offers.filter(offer => {
+            const name = (offer.name || offer.title || offer.product?.name || '').toLowerCase();
+            const id = (offer.id || '').toString().toLowerCase();
+            const externalId = (offer.external?.id || '').toString().toLowerCase();
+            return (
+                (name && name.includes(phrase)) ||
+                (id && id.includes(phrase)) ||
+                (externalId && externalId.includes(phrase))
+            );
+        });
+    }
+
+    // Apply status filter
     if (!currentStatusFilter || currentStatusFilter === 'ALL') {
-        return currentOffers;
+        return offers;
     }
     
-    return currentOffers.filter(offer => {
+    return offers.filter(offer => {
         const status = offer?.publication?.status || null;
         if (!status) {
             // If there is no status, hide it when a specific filter is applied

@@ -178,6 +178,33 @@ body {
     font-weight: 600;
 }
 
+/* Offers header search bar */
+.offers-search-wrapper {
+    flex: 0 0 260px;
+    max-width: 100%;
+}
+
+.offers-search-input {
+    width: 100%;
+    padding: 8px 12px;
+    border-radius: 20px;
+    border: 1px solid #e0e0e0;
+    font-size: 0.9em;
+    background-color: #ffffff;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.offers-search-input::placeholder {
+    color: #999;
+}
+
+.offers-search-input:focus {
+    outline: none;
+    border-color: #1a73e8;
+    box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.12);
+    background-color: #ffffff;
+}
+
 /* Info Icon and Tooltip Styles */
 .info-icon-wrapper {
     position: relative;
