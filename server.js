@@ -2460,14 +2460,28 @@ app.post('/api/prestashop/products', async (req, res) => {
     let uploadedImages = [];
     let imageUrls = [];
     
-    // Collect image URLs from Allegro
+    // Collect image URLs from Allegro - collect ALL images, not just the first one
+    // First, add primary image if it exists
     if (offer.primaryImage && offer.primaryImage.url) {
       imageUrls.push(offer.primaryImage.url);
-    } else if (offer.images && Array.isArray(offer.images)) {
-      imageUrls = offer.images.slice(0, 5).map(img => 
-        typeof img === 'string' ? img : (img.url || img.uri || img.path || '')
-      ).filter(url => url);
     }
+    
+    // Then, add all images from the images array
+    if (offer.images && Array.isArray(offer.images)) {
+      const additionalImages = offer.images.map(img => 
+        typeof img === 'string' ? img : (img.url || img.uri || img.path || '')
+      ).filter(url => url && url.length > 0);
+      
+      // Add images that aren't already in the array (avoid duplicates)
+      for (const imgUrl of additionalImages) {
+        if (!imageUrls.includes(imgUrl)) {
+          imageUrls.push(imgUrl);
+        }
+      }
+    }
+    
+    // Limit to 5 images total
+    imageUrls = imageUrls.slice(0, 5);
     
     // Upload images to PrestaShop (up to 5 images) - only for newly created products
     if (isNewProduct && imageUrls.length > 0 && prestashopProductId) {
