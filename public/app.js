@@ -292,22 +292,16 @@ function updateButtonStates() {
             if (prestashopApiKeyInput) {
                 prestashopApiKeyInput.readOnly = true;
             }
-            
-            // Enable CSV export buttons
-            const exportCategoriesCsvBtn = document.getElementById('exportCategoriesCsvBtn');
-            const exportProductsCsvBtn = document.getElementById('exportProductsCsvBtn');
-            const exportCombinationsCsvBtn = document.getElementById('exportCombinationsCsvBtn');
-            if (exportCategoriesCsvBtn) exportCategoriesCsvBtn.disabled = false;
-            if (exportProductsCsvBtn) exportProductsCsvBtn.disabled = false;
-            if (exportCombinationsCsvBtn) exportCombinationsCsvBtn.disabled = false;
+
+            // Update CSV export buttons based on current data
+            if (typeof updateCsvExportButtonsState === 'function') {
+                updateCsvExportButtonsState();
+            }
         } else {
-            // Disable CSV export buttons when PrestaShop is not configured
-            const exportCategoriesCsvBtn = document.getElementById('exportCategoriesCsvBtn');
-            const exportProductsCsvBtn = document.getElementById('exportProductsCsvBtn');
-            const exportCombinationsCsvBtn = document.getElementById('exportCombinationsCsvBtn');
-            if (exportCategoriesCsvBtn) exportCategoriesCsvBtn.disabled = true;
-            if (exportProductsCsvBtn) exportProductsCsvBtn.disabled = true;
-            if (exportCombinationsCsvBtn) exportCombinationsCsvBtn.disabled = true;
+            // Ensure CSV export buttons are disabled when PrestaShop is not configured
+            if (typeof updateCsvExportButtonsState === 'function') {
+                updateCsvExportButtonsState();
+            }
             // Not connected: blue, enabled, shows "Connect"
             prestashopConnectBtn.textContent = 'Connect';
             prestashopConnectBtn.className = 'btn btn-primary';
@@ -326,6 +320,35 @@ function updateButtonStates() {
                 prestashopApiKeyInput.readOnly = false;
             }
         }
+    }
+}
+
+// Update CSV export buttons state based on configuration and data availability
+function updateCsvExportButtonsState() {
+    const exportCategoriesCsvBtn = document.getElementById('exportCategoriesCsvBtn');
+    const exportProductsCsvBtn = document.getElementById('exportProductsCsvBtn');
+    const exportCombinationsCsvBtn = document.getElementById('exportCombinationsCsvBtn');
+
+    const canUsePrestashop = prestashopConfigured && prestashopAuthorized;
+
+    // Categories CSV: require configured PrestaShop and at least one category
+    if (exportCategoriesCsvBtn) {
+        const hasCategories =
+            (Array.isArray(allCategories) && allCategories.length > 0) ||
+            (Array.isArray(categoriesWithProducts) && categoriesWithProducts.length > 0);
+        exportCategoriesCsvBtn.disabled = !canUsePrestashop || !hasCategories;
+    }
+
+    // Products CSV: require configured PrestaShop and at least one imported product
+    if (exportProductsCsvBtn) {
+        const hasImportedProducts = Array.isArray(importedOffers) && importedOffers.length > 0;
+        exportProductsCsvBtn.disabled = !canUsePrestashop || !hasImportedProducts;
+    }
+
+    // Combinations CSV: same condition as products (needs imported products)
+    if (exportCombinationsCsvBtn) {
+        const hasImportedProducts = Array.isArray(importedOffers) && importedOffers.length > 0;
+        exportCombinationsCsvBtn.disabled = !canUsePrestashop || !hasImportedProducts;
     }
 }
 
@@ -2306,6 +2329,8 @@ function displayImportedOffers() {
     
     // Update export button state (checks both imported offers and PrestaShop config)
     updateExportButtonState();
+    // Also update CSV export buttons which depend on imported products
+    updateCsvExportButtonsState();
     
     if (importedOffers.length === 0) {
         importedListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #1a73e8;">No products imported yet</p>';
@@ -2894,7 +2919,8 @@ async function exportCategoriesCsv() {
         }
         showToast(`Export failed: ${error.message}`, 'error', 5000);
     } finally {
-        if (btn) btn.disabled = !prestashopAuthorized;
+        // Recalculate button states based on latest configuration/data
+        updateCsvExportButtonsState();
     }
 }
 
@@ -2940,7 +2966,8 @@ async function exportProductsCsv() {
         }
         showToast(`Export failed: ${error.message}`, 'error', 5000);
     } finally {
-        if (btn) btn.disabled = !prestashopAuthorized;
+        // Recalculate button states based on latest configuration/data
+        updateCsvExportButtonsState();
     }
 }
 
@@ -2986,7 +3013,8 @@ async function exportCombinationsCsv() {
         }
         showToast(`Export failed: ${error.message}`, 'error', 5000);
     } finally {
-        if (btn) btn.disabled = !prestashopAuthorized;
+        // Recalculate button states based on latest configuration/data
+        updateCsvExportButtonsState();
     }
 }
 
@@ -3053,6 +3081,9 @@ function loadOffersAndCategoriesFromStorage() {
             displayCategories(allCategories);
             updateCategorySelect();
         }
+
+        // Ensure CSV export buttons reflect loaded data
+        updateCsvExportButtonsState();
     } catch (e) {
         console.error('Error loading offers/categories from localStorage:', e);
     }
@@ -3170,6 +3201,9 @@ async function loadCategoriesFromOffers() {
 
             // Persist latest categories along with any loaded offers
             saveOffersAndCategories();
+
+            // Categories changed, refresh CSV export buttons state
+            updateCsvExportButtonsState();
         } else {
             throw new Error(result.error?.message || 'Failed to fetch offers');
         }
