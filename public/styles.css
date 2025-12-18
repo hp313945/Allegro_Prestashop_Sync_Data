@@ -1459,6 +1459,7 @@ input[type="checkbox"] {
     height: 100%;
     object-fit: cover;
     object-position: center;
+    transition: opacity 0.4s ease-in-out;
 }
 
 .offer-image-placeholder {
@@ -1983,6 +1984,7 @@ input[type="checkbox"] {
     height: 100%;
     object-fit: cover;
     object-position: center;
+    transition: opacity 0.4s ease-in-out;
 }
 
 .imported-item-image-placeholder {

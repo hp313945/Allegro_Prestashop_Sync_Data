@@ -1592,6 +1592,91 @@ function getOffersFilteredByStatus() {
 }
 
 // Display current page of offers
+// Initialize automatic image rotation for products with multiple images
+function initializeImageRotation() {
+    // Clear any existing intervals
+    if (window.imageRotationIntervals) {
+        window.imageRotationIntervals.forEach(interval => clearInterval(interval));
+        window.imageRotationIntervals = [];
+    } else {
+        window.imageRotationIntervals = [];
+    }
+    
+    // Find all product cards with multiple images
+    document.querySelectorAll('.offer-card[data-image-urls]').forEach(card => {
+        const imageUrlsJson = card.getAttribute('data-image-urls');
+        if (!imageUrlsJson) return;
+        
+        try {
+            const imageUrls = JSON.parse(imageUrlsJson);
+            if (imageUrls && Array.isArray(imageUrls) && imageUrls.length > 1) {
+                const imgElement = card.querySelector('.offer-image');
+                if (imgElement) {
+                    // Start rotation for this product
+                    startImageRotation(card, imageUrls, imgElement);
+                }
+            }
+        } catch (e) {
+            console.error('Error parsing image URLs:', e);
+        }
+    });
+}
+
+// Start image rotation for a specific product card
+function startImageRotation(card, imageUrls, imgElement) {
+    // Clear any existing rotation for this card
+    if (card.dataset.rotationInterval) {
+        clearInterval(parseInt(card.dataset.rotationInterval));
+    }
+    
+    let currentIndex = 0;
+    
+    // Function to rotate to next image
+    const rotateImage = () => {
+        if (!card.isConnected || !document.contains(card)) {
+            // Card was removed from DOM, stop rotation
+            if (card.dataset.rotationInterval) {
+                clearInterval(parseInt(card.dataset.rotationInterval));
+                delete card.dataset.rotationInterval;
+            }
+            return;
+        }
+        
+        // Check if imgElement still exists
+        const currentImg = card.querySelector('.offer-image') || card.querySelector('.imported-item-img');
+        if (!currentImg) {
+            if (card.dataset.rotationInterval) {
+                clearInterval(parseInt(card.dataset.rotationInterval));
+                delete card.dataset.rotationInterval;
+            }
+            return;
+        }
+        
+        currentIndex = (currentIndex + 1) % imageUrls.length;
+        const nextImageUrl = imageUrls[currentIndex];
+        
+        if (nextImageUrl && currentImg) {
+            // Add fade effect
+            currentImg.style.opacity = '0';
+            
+            setTimeout(() => {
+                if (currentImg && card.isConnected) {
+                    currentImg.src = nextImageUrl;
+                    currentImg.setAttribute('data-current-image-index', currentIndex);
+                    currentImg.style.opacity = '1';
+                }
+            }, 200); // Half of transition duration
+        }
+    };
+    
+    // Start rotation - change image every 3 seconds
+    const interval = setInterval(rotateImage, 3000);
+    window.imageRotationIntervals.push(interval);
+    
+    // Store interval reference on card for cleanup
+    card.dataset.rotationInterval = interval.toString();
+}
+
 async function displayOffersPage() {
     const offersListEl = document.getElementById('offersList');
     const resultsCountEl = document.getElementById('resultsCount');
@@ -1667,6 +1752,9 @@ async function displayOffersPage() {
         await Promise.all(productsToFetch.map(product => fetchProductDetails(product.id)));
     }
     
+    // Initialize automatic image rotation for products with multiple images
+    initializeImageRotation();
+    
     updatePagination();
 }
 
@@ -1717,12 +1805,17 @@ async function fetchProductDetails(productId) {
             if (imageUrl) {
                 const imageWrapper = card.querySelector('.offer-image-wrapper');
                 if (imageWrapper) {
+                    // Store image URLs in card data attribute for rotation
+                    const imageUrlsJson = JSON.stringify(imageUrls.slice(0, 5));
+                    card.setAttribute('data-image-urls', imageUrlsJson);
+                    
                     imageWrapper.innerHTML = `
                         <img src="${imageUrl}" alt="${escapeHtml(product.name || 'Product')}" class="offer-image" 
                              loading="lazy"
+                             data-current-image-index="0"
                              onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
                         ${totalImageCount > 1 ? `
-                            <div class="offer-image-count-badge" title="${totalImageCount} images available from Allegro">
+                            <div class="offer-image-count-badge" title="${totalImageCount} images available from Allegro - Auto-rotating">
                                 <span class="offer-image-count-icon">📷</span>
                                 <span class="offer-image-count-number">${totalImageCount}</span>
                             </div>
@@ -1731,6 +1824,14 @@ async function fetchProductDetails(productId) {
                             <span>No Image</span>
                         </div>
                     `;
+                    
+                    // Initialize rotation if multiple images
+                    if (totalImageCount > 1) {
+                        const imgElement = imageWrapper.querySelector('.offer-image');
+                        if (imgElement) {
+                            startImageRotation(card, imageUrls.slice(0, 5), imgElement);
+                        }
+                    }
                 }
             }
         }
@@ -2063,8 +2164,11 @@ function createOfferCard(product) {
         }
     }
     
+    // Store image URLs in JSON format for rotation (limit to 5)
+    const imageUrlsJson = JSON.stringify(imageUrls.slice(0, 5));
+    
     return `
-        <div class="offer-card" data-product-id="${productId}">
+        <div class="offer-card" data-product-id="${productId}" data-image-urls='${imageUrlsJson}'>
             <div class="offer-left-column">
                 ${statusBadge ? `
                     <div class="offer-status-badge ${
@@ -2078,9 +2182,10 @@ function createOfferCard(product) {
                     ${mainImage ? `
                         <img src="${mainImage}" alt="${escapeHtml(productName)}" class="offer-image" 
                              loading="lazy"
+                             data-current-image-index="0"
                              onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
                         ${totalImageCount > 1 ? `
-                            <div class="offer-image-count-badge" title="${totalImageCount} images available from Allegro">
+                            <div class="offer-image-count-badge" title="${totalImageCount} images available from Allegro - Auto-rotating">
                                 <span class="offer-image-count-icon">📷</span>
                                 <span class="offer-image-count-number">${totalImageCount}</span>
                             </div>
@@ -2461,6 +2566,9 @@ function displayImportedOffers() {
         // Count total images (limit to 5 as per backend logic)
         const totalImageCount = Math.min(imageUrls.length, 5);
         
+        // Store image URLs in JSON format for rotation (limit to 5)
+        const imageUrlsJson = JSON.stringify(imageUrls.slice(0, 5));
+        
         const productName = offer.name || 'Untitled Product';
         // Truncate product name to keep it short
         const shortName = productName.length > 50 ? productName.substring(0, 47) + '...' : productName;
@@ -2468,14 +2576,15 @@ function displayImportedOffers() {
         const shortId = offer.id.length > 12 ? offer.id.substring(0, 8) + '...' : offer.id;
         
         return `
-        <div class="imported-item" data-offer-id="${offer.id}">
+        <div class="imported-item" data-offer-id="${offer.id}" data-image-urls='${imageUrlsJson}'>
             <div class="imported-item-image">
                 ${mainImage ? `
                     <img src="${mainImage}" alt="${escapeHtml(productName)}" class="imported-item-img" 
                          loading="lazy"
+                         data-current-image-index="0"
                          onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
                     ${totalImageCount > 1 ? `
-                        <div class="offer-image-count-badge" title="${totalImageCount} images available from Allegro">
+                        <div class="offer-image-count-badge" title="${totalImageCount} images available from Allegro - Auto-rotating">
                             <span class="offer-image-count-icon">📷</span>
                             <span class="offer-image-count-number">${totalImageCount}</span>
                         </div>
@@ -2499,6 +2608,31 @@ function displayImportedOffers() {
         </div>
     `;
     }).join('');
+    
+    // Initialize automatic image rotation for imported products with multiple images
+    initializeImportedImageRotation();
+}
+
+// Initialize automatic image rotation for imported products
+function initializeImportedImageRotation() {
+    // Find all imported items with multiple images
+    document.querySelectorAll('.imported-item[data-image-urls]').forEach(item => {
+        const imageUrlsJson = item.getAttribute('data-image-urls');
+        if (!imageUrlsJson) return;
+        
+        try {
+            const imageUrls = JSON.parse(imageUrlsJson);
+            if (imageUrls && Array.isArray(imageUrls) && imageUrls.length > 1) {
+                const imgElement = item.querySelector('.imported-item-img');
+                if (imgElement) {
+                    // Start rotation for this imported product
+                    startImageRotation(item, imageUrls, imgElement);
+                }
+            }
+        } catch (e) {
+            console.error('Error parsing image URLs for imported item:', e);
+        }
+    });
 }
 
 // Remove imported offer

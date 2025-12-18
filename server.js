@@ -2154,13 +2154,34 @@ app.post('/api/prestashop/categories', async (req, res) => {
  */
 app.post('/api/prestashop/products', async (req, res) => {
   try {
-    const { offer, categoryId, autoCreateCategory, categories } = req.body;
+    let { offer, categoryId, autoCreateCategory, categories } = req.body;
     
     if (!offer || !offer.id || !offer.name) {
       return res.status(400).json({
         success: false,
         error: 'Invalid offer data'
       });
+    }
+
+    // Fetch full offer details to get complete image data
+    // The /sale/offers list endpoint may not return full image arrays
+    try {
+      const fullOfferData = await allegroApiRequest(`/sale/offers/${offer.id}`, {}, true);
+      
+      // Merge full offer data with the offer from request (full offer takes precedence)
+      // This ensures we have complete image data
+      offer = {
+        ...offer,
+        ...fullOfferData,
+        // Preserve some fields from original offer if they're not in full offer
+        id: offer.id,
+        name: offer.name || fullOfferData.name
+      };
+      
+      console.log(`Fetched full offer details for offer ${offer.id}, found ${fullOfferData.images?.length || 0} images`);
+    } catch (fetchError) {
+      console.warn(`Failed to fetch full offer details for ${offer.id}, using provided offer data:`, fetchError.message);
+      // Continue with the offer data provided - it might still have images
     }
 
     // Extract product data from Allegro offer
@@ -2461,24 +2482,46 @@ app.post('/api/prestashop/products', async (req, res) => {
     let imageUrls = [];
     
     // Collect image URLs from Allegro - collect ALL images, not just the first one
-    // First, add primary image if it exists
-    if (offer.primaryImage && offer.primaryImage.url) {
-      imageUrls.push(offer.primaryImage.url);
+    // According to Allegro API docs, images are in an array with url field: [{url: "..."}, {url: "..."}]
+    
+    // Method 1: Check images array first (this is the primary source for multiple images)
+    if (offer.images && Array.isArray(offer.images) && offer.images.length > 0) {
+      offer.images.forEach(img => {
+        let imgUrl = '';
+        if (typeof img === 'object' && img !== null) {
+          // Allegro API format: {url: "https://..."}
+          imgUrl = img.url || img.uri || img.path || img.src || img.link || '';
+        } else if (typeof img === 'string' && img.startsWith('http')) {
+          imgUrl = img;
+        }
+        if (imgUrl && imgUrl.length > 0 && !imageUrls.includes(imgUrl)) {
+          imageUrls.push(imgUrl);
+        }
+      });
     }
     
-    // Then, add all images from the images array
-    if (offer.images && Array.isArray(offer.images)) {
-      const additionalImages = offer.images.map(img => 
-        typeof img === 'string' ? img : (img.url || img.uri || img.path || '')
-      ).filter(url => url && url.length > 0);
-      
-      // Add images that aren't already in the array (avoid duplicates)
-      for (const imgUrl of additionalImages) {
-        if (!imageUrls.includes(imgUrl)) {
-          imageUrls.push(imgUrl);
+    // Method 2: Add primary image if it exists and isn't already in the array
+    // Note: primaryImage.url might be the same as images[0].url, so we check for duplicates
+    if (offer.primaryImage && offer.primaryImage.url) {
+      const primaryImageUrl = offer.primaryImage.url;
+      if (!imageUrls.includes(primaryImageUrl)) {
+        // Add primary image at the beginning if it's not already in the array
+        imageUrls.unshift(primaryImageUrl);
+      }
+    }
+    
+    // Method 3: Check alternative image locations (fallback)
+    const altImageFields = ['image', 'imageUrl', 'photo', 'thumbnail'];
+    for (const field of altImageFields) {
+      if (offer[field] && typeof offer[field] === 'string' && offer[field].startsWith('http')) {
+        if (!imageUrls.includes(offer[field])) {
+          imageUrls.push(offer[field]);
         }
       }
     }
+    
+    // Log image extraction for debugging
+    console.log(`Extracted ${imageUrls.length} image(s) for offer ${offer.id}:`, imageUrls);
     
     // Limit to 5 images total
     imageUrls = imageUrls.slice(0, 5);
