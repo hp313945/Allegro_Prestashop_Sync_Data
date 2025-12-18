@@ -170,7 +170,7 @@ function updateConfigStatuses() {
     const allegroStatus = document.getElementById('allegroConfigStatus');
     if (allegroStatus) {
         if (isAuthenticated) {
-            allegroStatus.textContent = 'Allegro API Configuration Connected';
+            allegroStatus.textContent = 'Connected';
             allegroStatus.className = 'config-status success';
         } else {
             allegroStatus.textContent = 'Not Configured';
@@ -178,15 +178,51 @@ function updateConfigStatuses() {
         }
     }
     
+    // Update Allegro quick status
+    const allegroQuickStatus = document.getElementById('allegroQuickStatus');
+    if (allegroQuickStatus) {
+        if (isAuthenticated) {
+            allegroQuickStatus.textContent = 'Allegro: Connected';
+            allegroQuickStatus.className = 'quick-status-badge success';
+        } else {
+            allegroQuickStatus.textContent = 'Allegro: Not Configured';
+            allegroQuickStatus.className = 'quick-status-badge error';
+        }
+    }
+    
     // Update PrestaShop status
     const prestashopStatusEl = document.getElementById('prestashopConfigStatus');
     if (prestashopStatusEl) {
-        if (prestashopConfigured) {
-            prestashopStatusEl.textContent = 'Configured';
+        if (prestashopConfigured && prestashopAuthorized) {
+            prestashopStatusEl.textContent = 'Connected';
             prestashopStatusEl.className = 'config-status success';
         } else {
             prestashopStatusEl.textContent = 'Not Configured';
             prestashopStatusEl.className = 'config-status error';
+        }
+    }
+    
+    // Update PrestaShop quick status
+    const prestashopQuickStatus = document.getElementById('prestashopQuickStatus');
+    if (prestashopQuickStatus) {
+        if (prestashopConfigured && prestashopAuthorized) {
+            prestashopQuickStatus.textContent = 'PrestaShop: Connected';
+            prestashopQuickStatus.className = 'quick-status-badge success';
+        } else {
+            prestashopQuickStatus.textContent = 'PrestaShop: Not Configured';
+            prestashopQuickStatus.className = 'quick-status-badge error';
+        }
+    }
+    
+    // Update PrestaShop header status
+    const prestashopHeaderStatus = document.getElementById('prestashopHeaderStatus');
+    if (prestashopHeaderStatus) {
+        if (prestashopConfigured && prestashopAuthorized) {
+            prestashopHeaderStatus.textContent = 'Connected';
+            prestashopHeaderStatus.className = 'status-value success';
+        } else {
+            prestashopHeaderStatus.textContent = 'Not Connected';
+            prestashopHeaderStatus.className = 'status-value error';
         }
     }
     
@@ -256,7 +292,22 @@ function updateButtonStates() {
             if (prestashopApiKeyInput) {
                 prestashopApiKeyInput.readOnly = true;
             }
+            
+            // Enable CSV export buttons
+            const exportCategoriesCsvBtn = document.getElementById('exportCategoriesCsvBtn');
+            const exportProductsCsvBtn = document.getElementById('exportProductsCsvBtn');
+            const exportCombinationsCsvBtn = document.getElementById('exportCombinationsCsvBtn');
+            if (exportCategoriesCsvBtn) exportCategoriesCsvBtn.disabled = false;
+            if (exportProductsCsvBtn) exportProductsCsvBtn.disabled = false;
+            if (exportCombinationsCsvBtn) exportCombinationsCsvBtn.disabled = false;
         } else {
+            // Disable CSV export buttons when PrestaShop is not configured
+            const exportCategoriesCsvBtn = document.getElementById('exportCategoriesCsvBtn');
+            const exportProductsCsvBtn = document.getElementById('exportProductsCsvBtn');
+            const exportCombinationsCsvBtn = document.getElementById('exportCombinationsCsvBtn');
+            if (exportCategoriesCsvBtn) exportCategoriesCsvBtn.disabled = true;
+            if (exportProductsCsvBtn) exportProductsCsvBtn.disabled = true;
+            if (exportCombinationsCsvBtn) exportCombinationsCsvBtn.disabled = true;
             // Not connected: blue, enabled, shows "Connect"
             prestashopConnectBtn.textContent = 'Connect';
             prestashopConnectBtn.className = 'btn btn-primary';
@@ -397,9 +448,47 @@ function setupEventListeners() {
         loadPrestashopCategoriesBtn.addEventListener('click', loadPrestashopCategories);
     }
     
+    // CSV Export event listeners
+    const exportCategoriesCsvBtn = document.getElementById('exportCategoriesCsvBtn');
+    if (exportCategoriesCsvBtn) {
+        exportCategoriesCsvBtn.addEventListener('click', exportCategoriesCsv);
+    }
+    const exportProductsCsvBtn = document.getElementById('exportProductsCsvBtn');
+    if (exportProductsCsvBtn) {
+        exportProductsCsvBtn.addEventListener('click', exportProductsCsv);
+    }
+    const exportCombinationsCsvBtn = document.getElementById('exportCombinationsCsvBtn');
+    if (exportCombinationsCsvBtn) {
+        exportCombinationsCsvBtn.addEventListener('click', exportCombinationsCsv);
+    }
+    
+    // Reload Categories button
+    const reloadCategoriesBtn = document.getElementById('reloadCategoriesBtn');
+    if (reloadCategoriesBtn) {
+        reloadCategoriesBtn.addEventListener('click', async () => {
+            reloadCategoriesBtn.disabled = true;
+            try {
+                await loadCategoriesFromOffers();
+            } finally {
+                reloadCategoriesBtn.disabled = !isAuthenticated || !isOAuthConnected;
+            }
+        });
+        // Set initial disabled state
+        reloadCategoriesBtn.disabled = !isAuthenticated || !isOAuthConnected;
+    }
+    
     // Load PrestaShop config on startup
     loadPrestashopConfig();
     checkPrestashopStatus();
+    
+    // Setup collapsible config panel
+    setupConfigPanelToggle();
+    
+    // Setup tab navigation
+    setupTabNavigation();
+    
+    // Initialize dashboard stats
+    updateDashboardStats();
 }
 
 // Toast notification system
@@ -771,6 +860,12 @@ function updateUIState(configured) {
         } else {
             loadOffersBtn.title = '';
         }
+    }
+    
+    // Update reload categories button
+    const reloadCategoriesBtnEl = document.getElementById('reloadCategoriesBtn');
+    if (reloadCategoriesBtnEl) {
+        reloadCategoriesBtnEl.disabled = !authenticated || !isOAuthConnected;
     }
     
     if (importSelectedBtn) {
@@ -1489,6 +1584,15 @@ async function displayOffersPage() {
     // Update results count with total filtered count
     resultsCountEl.textContent = filteredOffers.length;
     
+    // Update tab badge
+    const tabOffersCount = document.getElementById('tabOffersCount');
+    if (tabOffersCount) {
+        tabOffersCount.textContent = filteredOffers.length;
+    }
+    
+    // Update dashboard stats
+    updateDashboardStats();
+    
     if (pageOffers.length === 0) {
         if (selectedCategoryId !== null) {
             offersListEl.innerHTML = '<p style="text-align: center; padding: 40px; color: #1a73e8;">No product offers found in this category. Try selecting a different category or click "Load My Offers" to load products.</p>';
@@ -2186,6 +2290,15 @@ function displayImportedOffers() {
     
     importedCountEl.textContent = importedOffers.length;
     
+    // Update tab badge
+    const tabImportedCount = document.getElementById('tabImportedCount');
+    if (tabImportedCount) {
+        tabImportedCount.textContent = importedOffers.length;
+    }
+    
+    // Update dashboard stats
+    updateDashboardStats();
+    
     // Enable/disable buttons based on imported products count
     if (clearImportedBtn) {
         clearImportedBtn.disabled = importedOffers.length === 0;
@@ -2738,6 +2851,145 @@ async function exportToPrestashop() {
     }
 }
 
+// CSV Export Functions
+async function exportCategoriesCsv() {
+    const btn = document.getElementById('exportCategoriesCsvBtn');
+    const messageEl = document.getElementById('csvExportMessage');
+    
+    if (btn) btn.disabled = true;
+    if (messageEl) {
+        messageEl.style.display = 'block';
+        messageEl.className = 'message info';
+        messageEl.textContent = 'Exporting categories...';
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/export/categories.csv`);
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Failed to export categories' }));
+            throw new Error(errorData.error || 'Failed to export categories');
+        }
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'categories_import.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+        if (messageEl) {
+            messageEl.className = 'message success';
+            messageEl.textContent = 'Categories exported successfully!';
+        }
+        showToast('Categories exported successfully!', 'success', 3000);
+    } catch (error) {
+        console.error('Export error:', error);
+        if (messageEl) {
+            messageEl.className = 'message error';
+            messageEl.textContent = `Export failed: ${error.message}`;
+        }
+        showToast(`Export failed: ${error.message}`, 'error', 5000);
+    } finally {
+        if (btn) btn.disabled = !prestashopAuthorized;
+    }
+}
+
+async function exportProductsCsv() {
+    const btn = document.getElementById('exportProductsCsvBtn');
+    const messageEl = document.getElementById('csvExportMessage');
+    
+    if (btn) btn.disabled = true;
+    if (messageEl) {
+        messageEl.style.display = 'block';
+        messageEl.className = 'message info';
+        messageEl.textContent = 'Exporting products...';
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/export/products.csv`);
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Failed to export products' }));
+            throw new Error(errorData.error || 'Failed to export products');
+        }
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'products_import.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+        if (messageEl) {
+            messageEl.className = 'message success';
+            messageEl.textContent = 'Products exported successfully!';
+        }
+        showToast('Products exported successfully!', 'success', 3000);
+    } catch (error) {
+        console.error('Export error:', error);
+        if (messageEl) {
+            messageEl.className = 'message error';
+            messageEl.textContent = `Export failed: ${error.message}`;
+        }
+        showToast(`Export failed: ${error.message}`, 'error', 5000);
+    } finally {
+        if (btn) btn.disabled = !prestashopAuthorized;
+    }
+}
+
+async function exportCombinationsCsv() {
+    const btn = document.getElementById('exportCombinationsCsvBtn');
+    const messageEl = document.getElementById('csvExportMessage');
+    
+    if (btn) btn.disabled = true;
+    if (messageEl) {
+        messageEl.style.display = 'block';
+        messageEl.className = 'message info';
+        messageEl.textContent = 'Exporting combinations...';
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/export/combinations.csv`);
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Failed to export combinations' }));
+            throw new Error(errorData.error || 'Failed to export combinations');
+        }
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'combinations_import.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+        if (messageEl) {
+            messageEl.className = 'message success';
+            messageEl.textContent = 'Combinations exported successfully!';
+        }
+        showToast('Combinations exported successfully!', 'success', 3000);
+    } catch (error) {
+        console.error('Export error:', error);
+        if (messageEl) {
+            messageEl.className = 'message error';
+            messageEl.textContent = `Export failed: ${error.message}`;
+        }
+        showToast(`Export failed: ${error.message}`, 'error', 5000);
+    } finally {
+        if (btn) btn.disabled = !prestashopAuthorized;
+    }
+}
+
 // Save imported offers to localStorage
 function saveImportedOffers() {
     localStorage.setItem('importedOffers', JSON.stringify(importedOffers));
@@ -2908,6 +3160,9 @@ async function loadCategoriesFromOffers() {
             // Display categories
             displayCategories(categoriesArray);
             updateCategorySelect();
+            
+            // Update dashboard stats
+            updateDashboardStats();
             
             if (categoriesArray.length === 0) {
                 categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #666;">No categories found in your offers. Load offers to see categories.</p>';
@@ -3310,6 +3565,82 @@ function closeErrorMessage() {
             errorEl.classList.remove('hiding');
             errorEl.style.marginBottom = '0';
         }, 300);
+    }
+}
+
+// Setup collapsible config panel
+function setupConfigPanelToggle() {
+    const toggle = document.getElementById('configPanelToggle');
+    const wrapper = document.querySelector('.config-panel-wrapper');
+    
+    if (toggle && wrapper) {
+        // Check if config is already set (both Allegro and PrestaShop)
+        const isConfigured = isAuthenticated && prestashopConfigured && prestashopAuthorized;
+        if (isConfigured) {
+            wrapper.classList.add('collapsed');
+        }
+        
+        toggle.addEventListener('click', () => {
+            wrapper.classList.toggle('collapsed');
+        });
+    }
+}
+
+// Setup tab navigation
+function setupTabNavigation() {
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+    
+    tabButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            const targetTab = button.getAttribute('data-tab');
+            
+            // Remove active class from all tabs and contents
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            tabContents.forEach(content => content.classList.remove('active'));
+            
+            // Add active class to clicked tab and corresponding content
+            button.classList.add('active');
+            const targetContent = document.getElementById(`tab-${targetTab}`);
+            if (targetContent) {
+                targetContent.classList.add('active');
+            }
+        });
+    });
+}
+
+// Update dashboard stats
+function updateDashboardStats() {
+    // Update offers count
+    const statsOffersCount = document.getElementById('statsOffersCount');
+    if (statsOffersCount) {
+        try {
+            const filteredOffers = typeof getOffersFilteredByStatus === 'function' ? getOffersFilteredByStatus() : allLoadedOffers;
+            statsOffersCount.textContent = filteredOffers ? filteredOffers.length : (allLoadedOffers.length || 0);
+        } catch (e) {
+            statsOffersCount.textContent = allLoadedOffers.length || 0;
+        }
+    }
+    
+    // Update imported count
+    const statsImportedCount = document.getElementById('statsImportedCount');
+    if (statsImportedCount) {
+        statsImportedCount.textContent = importedOffers.length || 0;
+    }
+    
+    // Update categories count
+    const statsCategoriesCount = document.getElementById('statsCategoriesCount');
+    if (statsCategoriesCount) {
+        statsCategoriesCount.textContent = allCategories.length || 0;
+    }
+    
+    // Update active offers count
+    const statsActiveCount = document.getElementById('statsActiveCount');
+    if (statsActiveCount) {
+        const activeOffers = (allLoadedOffers || []).filter(offer => 
+            offer.publication && offer.publication.status === 'ACTIVE'
+        );
+        statsActiveCount.textContent = activeOffers.length || 0;
     }
 }
 

@@ -2767,6 +2767,736 @@ app.get('/log', (req, res) => {
   }
 });
 
+/**
+ * CSV Export Utility Functions
+ */
+
+/**
+ * Escape CSV field value (handles semicolons, quotes, newlines)
+ */
+function escapeCsvField(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const str = String(value);
+  // If contains semicolon, quote, or newline, wrap in quotes and escape quotes
+  if (str.includes(';') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+}
+
+/**
+ * Convert array to CSV row (semicolon-delimited)
+ */
+function arrayToCsvRow(fields) {
+  return fields.map(escapeCsvField).join(';');
+}
+
+/**
+ * Export categories to CSV format
+ */
+async function exportCategoriesToCsv() {
+  try {
+    // Fetch all categories from PrestaShop
+    let allCategories = [];
+    let limit = 1000;
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const data = await prestashopApiRequest(`categories?limit=${limit}${offset > 0 ? `&offset=${offset}` : ''}`, 'GET');
+      
+      let categories = [];
+      if (data.categories) {
+        if (Array.isArray(data.categories)) {
+          categories = data.categories.map(item => item.category || item);
+        } else if (data.categories.category) {
+          categories = Array.isArray(data.categories.category) 
+            ? data.categories.category 
+            : [data.categories.category];
+        }
+      } else if (data.category) {
+        categories = Array.isArray(data.category) ? data.category : [data.category];
+      }
+
+      if (categories.length === 0) {
+        hasMore = false;
+      } else {
+        allCategories = allCategories.concat(categories);
+        if (categories.length < limit) {
+          hasMore = false;
+        } else {
+          offset += limit;
+        }
+      }
+    }
+
+    // Build category hierarchy map
+    const categoryMap = {};
+    allCategories.forEach(cat => {
+      categoryMap[cat.id] = cat;
+    });
+
+    // CSV Header
+    const header = [
+      'Category ID',
+      'Active (0/1)',
+      'Name *',
+      'Parent category',
+      'Root category (0/1)',
+      'Description',
+      'Meta title',
+      'Meta keywords',
+      'Meta description',
+      'URL rewritten',
+      'Image URL'
+    ];
+
+    const rows = [arrayToCsvRow(header)];
+
+    // Process each category
+    allCategories.forEach(cat => {
+      const id = cat.id || '';
+      const active = cat.active === '1' || cat.active === 1 ? '1' : '0';
+      
+      // Get name (first language value)
+      let name = '';
+      if (cat.name) {
+        if (Array.isArray(cat.name)) {
+          name = cat.name[0]?.value || cat.name[0] || '';
+        } else if (cat.name.value) {
+          name = cat.name.value;
+        } else if (typeof cat.name === 'string') {
+          name = cat.name;
+        }
+      }
+
+      // Get parent category name
+      let parentCategory = 'Home';
+      if (cat.id_parent && cat.id_parent !== '0' && cat.id_parent !== 0 && categoryMap[cat.id_parent]) {
+        const parent = categoryMap[cat.id_parent];
+        if (parent && parent.name) {
+          if (Array.isArray(parent.name)) {
+            parentCategory = parent.name[0]?.value || parent.name[0] || 'Home';
+          } else if (parent.name.value) {
+            parentCategory = parent.name.value;
+          } else if (typeof parent.name === 'string') {
+            parentCategory = parent.name;
+          }
+        }
+      }
+
+      const rootCategory = (cat.id_parent === '0' || cat.id_parent === 0 || !cat.id_parent) ? '0' : '0';
+
+      // Get description
+      let description = '';
+      if (cat.description) {
+        if (Array.isArray(cat.description)) {
+          description = cat.description[0]?.value || cat.description[0] || '';
+        } else if (cat.description.value) {
+          description = cat.description.value;
+        } else if (typeof cat.description === 'string') {
+          description = cat.description;
+        }
+      }
+
+      // Get meta fields
+      let metaTitle = '';
+      if (cat.meta_title) {
+        if (Array.isArray(cat.meta_title)) {
+          metaTitle = cat.meta_title[0]?.value || cat.meta_title[0] || '';
+        } else if (cat.meta_title.value) {
+          metaTitle = cat.meta_title.value;
+        } else if (typeof cat.meta_title === 'string') {
+          metaTitle = cat.meta_title;
+        }
+      }
+
+      let metaKeywords = '';
+      if (cat.meta_keywords) {
+        if (Array.isArray(cat.meta_keywords)) {
+          metaKeywords = cat.meta_keywords[0]?.value || cat.meta_keywords[0] || '';
+        } else if (cat.meta_keywords.value) {
+          metaKeywords = cat.meta_keywords.value;
+        } else if (typeof cat.meta_keywords === 'string') {
+          metaKeywords = cat.meta_keywords;
+        }
+      }
+
+      let metaDescription = '';
+      if (cat.meta_description) {
+        if (Array.isArray(cat.meta_description)) {
+          metaDescription = cat.meta_description[0]?.value || cat.meta_description[0] || '';
+        } else if (cat.meta_description.value) {
+          metaDescription = cat.meta_description.value;
+        } else if (typeof cat.meta_description === 'string') {
+          metaDescription = cat.meta_description;
+        }
+      }
+
+      // Get URL rewritten
+      let urlRewritten = '';
+      if (cat.link_rewrite) {
+        if (Array.isArray(cat.link_rewrite)) {
+          urlRewritten = cat.link_rewrite[0]?.value || cat.link_rewrite[0] || '';
+        } else if (cat.link_rewrite.value) {
+          urlRewritten = cat.link_rewrite.value;
+        } else if (typeof cat.link_rewrite === 'string') {
+          urlRewritten = cat.link_rewrite;
+        }
+      }
+
+      // Image URL (not typically in PrestaShop category API response, but we'll try)
+      const imageUrl = '';
+
+      const row = [
+        id,
+        active,
+        name,
+        parentCategory,
+        rootCategory,
+        description,
+        metaTitle,
+        metaKeywords,
+        metaDescription,
+        urlRewritten,
+        imageUrl
+      ];
+
+      rows.push(arrayToCsvRow(row));
+    });
+
+    return rows.join('\n');
+  } catch (error) {
+    throw new Error(`Failed to export categories: ${error.message}`);
+  }
+}
+
+/**
+ * Export products to CSV format
+ */
+async function exportProductsToCsv() {
+  try {
+    // Fetch all products from PrestaShop
+    let allProducts = [];
+    let limit = 1000;
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const data = await prestashopApiRequest(`products?limit=${limit}${offset > 0 ? `&offset=${offset}` : ''}`, 'GET');
+      
+      let products = [];
+      if (data.products) {
+        if (Array.isArray(data.products)) {
+          products = data.products.map(item => item.product || item);
+        } else if (data.products.product) {
+          products = Array.isArray(data.products.product) 
+            ? data.products.product 
+            : [data.products.product];
+        }
+      } else if (data.product) {
+        products = Array.isArray(data.product) ? data.product : [data.product];
+      }
+
+      if (products.length === 0) {
+        hasMore = false;
+      } else {
+        allProducts = allProducts.concat(products);
+        if (products.length < limit) {
+          hasMore = false;
+        } else {
+          offset += limit;
+        }
+      }
+    }
+
+    // CSV Header (matching the sample format)
+    const header = [
+      'Product ID',
+      'Active (0/1)',
+      'Name *',
+      'Categories (x,y,z...)',
+      'Price tax excluded',
+      'Tax rules ID',
+      'Wholesale price',
+      'On sale (0/1)',
+      'Discount amount',
+      'Discount percent',
+      'Discount from (yyyy-mm-dd)',
+      'Discount to (yyyy-mm-dd)',
+      'Reference #',
+      'Supplier reference #',
+      'Supplier',
+      'Manufacturer',
+      'EAN13',
+      'UPC',
+      'Ecotax',
+      'Width',
+      'Height',
+      'Depth',
+      'Weight',
+      'Delivery time of in-stock products',
+      'Delivery time of out-of-stock products with allowed orders',
+      'Quantity',
+      'Minimal quantity',
+      'Low stock level',
+      'Send me an email when the quantity is under this level',
+      'Visibility',
+      'Additional shipping cost',
+      'Unity',
+      'Unit price',
+      'Summary',
+      'Description',
+      'Tags (x,y,z...)',
+      'Meta title',
+      'Meta keywords',
+      'Meta description',
+      'URL rewritten',
+      'Text when in stock',
+      'Text when backorder allowed',
+      'Available for order (0 = No, 1 = Yes)',
+      'Product available date',
+      'Product creation date',
+      'Show price (0 = No, 1 = Yes)',
+      'Image URLs (x,y,z...)',
+      'Image alt texts (x,y,z...)',
+      'Delete existing images (0 = No, 1 = Yes)',
+      'Feature(Name:Value:Position)',
+      'Available online only (0 = No, 1 = Yes)',
+      'Condition',
+      'Customizable (0 = No, 1 = Yes)',
+      'Uploadable files (0 = No, 1 = Yes)',
+      'Text fields (0 = No, 1 = Yes)',
+      'Out of stock action',
+      'Virtual product',
+      'File URL',
+      'Number of allowed downloads',
+      'Expiration date',
+      'Number of days',
+      'ID / Name of shop',
+      'Advanced stock management',
+      'Depends On Stock',
+      'Warehouse',
+      'Acessories  (x,y,z...)'
+    ];
+
+    const rows = [arrayToCsvRow(header)];
+
+    // Process each product
+    for (const product of allProducts) {
+      // Get category names
+      let categoryNames = [];
+      if (product.associations && product.associations.categories && product.associations.categories.category) {
+        const categories = Array.isArray(product.associations.categories.category)
+          ? product.associations.categories.category
+          : [product.associations.categories.category];
+        
+        // Fetch category details to get names
+        for (const catRef of categories) {
+          try {
+            const catData = await prestashopApiRequest(`categories/${catRef.id}`, 'GET');
+            const cat = catData.category || catData;
+            if (cat && cat.name) {
+              let catName = '';
+              if (Array.isArray(cat.name)) {
+                catName = cat.name[0]?.value || cat.name[0] || '';
+              } else if (cat.name.value) {
+                catName = cat.name.value;
+              } else if (typeof cat.name === 'string') {
+                catName = cat.name;
+              }
+              if (catName) categoryNames.push(catName);
+            }
+          } catch (e) {
+            // Skip if category fetch fails
+          }
+        }
+      }
+
+      // Get stock quantity
+      let quantity = '0';
+      try {
+        const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${product.id}]&filter[id_product_attribute]=[0]`, 'GET');
+        if (stockData.stock_availables) {
+          const stocks = Array.isArray(stockData.stock_availables) 
+            ? stockData.stock_availables 
+            : [stockData.stock_availables];
+          if (stocks.length > 0) {
+            const stock = stocks[0].stock_available || stocks[0];
+            quantity = stock.quantity || '0';
+          }
+        }
+      } catch (e) {
+        // Use default if stock fetch fails
+      }
+
+      // Helper to get localized field
+      const getLocalizedField = (field) => {
+        if (!product[field]) return '';
+        if (Array.isArray(product[field])) {
+          return product[field][0]?.value || product[field][0] || '';
+        }
+        if (product[field].value) return product[field].value;
+        if (typeof product[field] === 'string') return product[field];
+        return '';
+      };
+
+      const id = product.id || '';
+      const active = (product.active === '1' || product.active === 1) ? '1' : '0';
+      const name = getLocalizedField('name');
+      const categories = categoryNames.join(',');
+      const price = product.price || '0.00';
+      const taxRulesId = product.id_tax_rules_group || '1';
+      const wholesalePrice = product.wholesale_price || '';
+      const onSale = (product.on_sale === '1' || product.on_sale === 1) ? '1' : '0';
+      const discountAmount = '';
+      const discountPercent = '';
+      const discountFrom = '';
+      const discountTo = '';
+      const reference = product.reference || '';
+      const supplierReference = '';
+      const supplier = '';
+      const manufacturer = '';
+      const ean13 = product.ean13 || '';
+      const upc = product.upc || '';
+      const ecotax = product.ecotax || '';
+      const width = product.width || '';
+      const height = product.height || '';
+      const depth = product.depth || '';
+      const weight = product.weight || '';
+      const deliveryTimeInStock = '';
+      const deliveryTimeOutOfStock = '';
+      const minimalQuantity = product.minimal_quantity || '1';
+      const lowStockLevel = '';
+      const emailOnLowStock = '';
+      const visibility = product.visibility || 'both';
+      const additionalShippingCost = product.additional_shipping_cost || '';
+      const unity = '';
+      const unitPrice = '';
+      const summary = getLocalizedField('description_short');
+      const description = getLocalizedField('description');
+      const tags = '';
+      const metaTitle = getLocalizedField('meta_title');
+      const metaKeywords = getLocalizedField('meta_keywords');
+      const metaDescription = getLocalizedField('meta_description');
+      const urlRewritten = getLocalizedField('link_rewrite');
+      const textInStock = '';
+      const textBackorder = '';
+      const availableForOrder = (product.available_for_order === '1' || product.available_for_order === 1) ? '1' : '0';
+      const productAvailableDate = '';
+      const productCreationDate = '';
+      const showPrice = (product.show_price === '1' || product.show_price === 1) ? '1' : '0';
+      const imageUrls = '';
+      const imageAltTexts = '';
+      const deleteExistingImages = '0';
+      const features = '';
+      const availableOnlineOnly = (product.online_only === '1' || product.online_only === 1) ? '1' : '0';
+      const condition = product.condition || 'new';
+      const customizable = '0';
+      const uploadableFiles = '0';
+      const textFields = '0';
+      const outOfStockAction = '';
+      const virtualProduct = (product.is_virtual === '1' || product.is_virtual === 1) ? '1' : '0';
+      const fileUrl = '';
+      const allowedDownloads = '';
+      const expirationDate = '';
+      const numberOfDays = '';
+      const shopId = '';
+      const advancedStockManagement = (product.advanced_stock_management === '1' || product.advanced_stock_management === 1) ? '1' : '0';
+      const dependsOnStock = '';
+      const warehouse = '';
+      const accessories = '';
+
+      const row = [
+        id, active, name, categories, price, taxRulesId, wholesalePrice, onSale,
+        discountAmount, discountPercent, discountFrom, discountTo, reference, supplierReference,
+        supplier, manufacturer, ean13, upc, ecotax, width, height, depth, weight,
+        deliveryTimeInStock, deliveryTimeOutOfStock, quantity, minimalQuantity, lowStockLevel,
+        emailOnLowStock, visibility, additionalShippingCost, unity, unitPrice, summary, description,
+        tags, metaTitle, metaKeywords, metaDescription, urlRewritten, textInStock, textBackorder,
+        availableForOrder, productAvailableDate, productCreationDate, showPrice, imageUrls,
+        imageAltTexts, deleteExistingImages, features, availableOnlineOnly, condition,
+        customizable, uploadableFiles, textFields, outOfStockAction, virtualProduct, fileUrl,
+        allowedDownloads, expirationDate, numberOfDays, shopId, advancedStockManagement,
+        dependsOnStock, warehouse, accessories
+      ];
+
+      rows.push(arrayToCsvRow(row));
+    }
+
+    return rows.join('\n');
+  } catch (error) {
+    throw new Error(`Failed to export products: ${error.message}`);
+  }
+}
+
+/**
+ * Export combinations to CSV format
+ */
+async function exportCombinationsToCsv() {
+  try {
+    // Fetch all products with combinations
+    let allProducts = [];
+    let limit = 1000;
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const data = await prestashopApiRequest(`products?limit=${limit}${offset > 0 ? `&offset=${offset}` : ''}`, 'GET');
+      
+      let products = [];
+      if (data.products) {
+        if (Array.isArray(data.products)) {
+          products = data.products.map(item => item.product || item);
+        } else if (data.products.product) {
+          products = Array.isArray(data.products.product) 
+            ? data.products.product 
+            : [data.products.product];
+        }
+      } else if (data.product) {
+        products = Array.isArray(data.product) ? data.product : [data.product];
+      }
+
+      if (products.length === 0) {
+        hasMore = false;
+      } else {
+        allProducts = allProducts.concat(products);
+        if (products.length < limit) {
+          hasMore = false;
+        } else {
+          offset += limit;
+        }
+      }
+    }
+
+    // CSV Header
+    const header = [
+      'Product ID*',
+      'Attribute (Name:Type:Position)*',
+      'Value (Value:Position)*',
+      'Supplier reference',
+      'Reference',
+      'EAN13',
+      'UPC',
+      'Wholesale price',
+      'Impact on price',
+      'Ecotax',
+      'Quantity',
+      'Minimal quantity',
+      'Low stock level',
+      'Impact on weight',
+      'Default (0 = No, 1 = Yes)',
+      'Combination available date',
+      'Image position',
+      'Image URLs (x,y,z...)',
+      'Image alt texts (x,y,z...)',
+      'ID / Name of shop',
+      'Advanced Stock Managment',
+      'Depends on stock',
+      'Warehouse'
+    ];
+
+    const rows = [arrayToCsvRow(header)];
+
+    // Process each product's combinations
+    for (const product of allProducts) {
+      const productId = product.id;
+      
+      // Fetch product combinations
+      try {
+        const combData = await prestashopApiRequest(`combinations?filter[id_product]=[${productId}]`, 'GET');
+        let combinations = [];
+        
+        if (combData.combinations) {
+          if (Array.isArray(combData.combinations)) {
+            combinations = combData.combinations.map(item => item.combination || item);
+          } else if (combData.combinations.combination) {
+            combinations = Array.isArray(combData.combinations.combination)
+              ? combData.combinations.combination
+              : [combData.combinations.combination];
+          }
+        } else if (combData.combination) {
+          combinations = Array.isArray(combData.combination) ? combData.combination : [combData.combination];
+        }
+
+        // Process each combination
+        for (const combination of combinations) {
+          // Fetch combination details to get attributes
+          try {
+            const combDetail = await prestashopApiRequest(`combinations/${combination.id}`, 'GET');
+            const comb = combDetail.combination || combDetail;
+
+            // Get attributes
+            let attributes = [];
+            let values = [];
+            if (comb.associations && comb.associations.product_option_values) {
+              const optionValues = Array.isArray(comb.associations.product_option_values.product_option_value)
+                ? comb.associations.product_option_values.product_option_value
+                : [comb.associations.product_option_values.product_option_value];
+
+              for (const optVal of optionValues) {
+                try {
+                  // Fetch option value to get attribute name
+                  const optValData = await prestashopApiRequest(`product_option_values/${optVal.id}`, 'GET');
+                  const optValObj = optValData.product_option_value || optValData;
+                  
+                  if (optValObj && optValObj.id_attribute_group) {
+                    // Fetch attribute group
+                    const attrGroupData = await prestashopApiRequest(`product_option_groups/${optValObj.id_attribute_group}`, 'GET');
+                    const attrGroup = attrGroupData.product_option_group || attrGroupData;
+                    
+                    const attrName = attrGroup.name ? (Array.isArray(attrGroup.name) ? attrGroup.name[0]?.value : attrGroup.name.value || attrGroup.name) : 'Attribute';
+                    const attrType = 'select'; // Default type
+                    const attrPosition = attributes.length;
+                    
+                    const valName = optValObj.name ? (Array.isArray(optValObj.name) ? optValObj.name[0]?.value : optValObj.name.value || optValObj.name) : 'Value';
+                    const valPosition = values.length;
+
+                    attributes.push(`${attrName}:${attrType}:${attrPosition}`);
+                    values.push(`${valName}:${valPosition}`);
+                  }
+                } catch (e) {
+                  // Skip if fetch fails
+                }
+              }
+            }
+
+            // Get stock for this combination
+            let quantity = '0';
+            try {
+              const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${productId}]&filter[id_product_attribute]=[${combination.id}]`, 'GET');
+              if (stockData.stock_availables) {
+                const stocks = Array.isArray(stockData.stock_availables) 
+                  ? stockData.stock_availables 
+                  : [stockData.stock_availables];
+                if (stocks.length > 0) {
+                  const stock = stocks[0].stock_available || stocks[0];
+                  quantity = stock.quantity || '0';
+                }
+              }
+            } catch (e) {
+              // Use default
+            }
+
+            const row = [
+              productId,
+              attributes.join(', '),
+              values.join(', '),
+              '', // Supplier reference
+              comb.reference || '',
+              comb.ean13 || '',
+              comb.upc || '',
+              comb.wholesale_price || '',
+              comb.price || '',
+              comb.ecotax || '',
+              quantity,
+              comb.minimal_quantity || '1',
+              '', // Low stock level
+              comb.weight || '',
+              (comb.default_on === '1' || comb.default_on === 1) ? '1' : '0',
+              '', // Combination available date
+              '', // Image position
+              '', // Image URLs
+              '', // Image alt texts
+              '', // Shop ID
+              (comb.advanced_stock_management === '1' || comb.advanced_stock_management === 1) ? '1' : '0',
+              '', // Depends on stock
+              ''  // Warehouse
+            ];
+
+            rows.push(arrayToCsvRow(row));
+          } catch (e) {
+            // Skip combination if detail fetch fails
+          }
+        }
+      } catch (e) {
+        // Skip if combinations fetch fails (product might not have combinations)
+      }
+    }
+
+    return rows.join('\n');
+  } catch (error) {
+    throw new Error(`Failed to export combinations: ${error.message}`);
+  }
+}
+
+/**
+ * Export categories CSV endpoint
+ */
+app.get('/api/export/categories.csv', async (req, res) => {
+  try {
+    if (!prestashopCredentials.baseUrl || !prestashopCredentials.apiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'PrestaShop not configured'
+      });
+    }
+
+    const csvContent = await exportCategoriesToCsv();
+    
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="categories_import.csv"');
+    res.send('\ufeff' + csvContent); // Add BOM for Excel compatibility
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Export products CSV endpoint
+ */
+app.get('/api/export/products.csv', async (req, res) => {
+  try {
+    if (!prestashopCredentials.baseUrl || !prestashopCredentials.apiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'PrestaShop not configured'
+      });
+    }
+
+    const csvContent = await exportProductsToCsv();
+    
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="products_import.csv"');
+    res.send('\ufeff' + csvContent); // Add BOM for Excel compatibility
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Export combinations CSV endpoint
+ */
+app.get('/api/export/combinations.csv', async (req, res) => {
+  try {
+    if (!prestashopCredentials.baseUrl || !prestashopCredentials.apiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'PrestaShop not configured'
+      });
+    }
+
+    const csvContent = await exportCombinationsToCsv();
+    
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="combinations_import.csv"');
+    res.send('\ufeff' + csvContent); // Add BOM for Excel compatibility
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Start server
 app.listen(PORT);
 

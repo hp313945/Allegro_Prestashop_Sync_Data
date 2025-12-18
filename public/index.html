@@ -17,25 +17,38 @@
                 </div>
                 <div class="user-info">
                     <div class="status-item">
-                        <span class="status-label">Auth</span>
+                        <span class="status-label">Allegro Auth:</span>
                         <span id="authStatus" class="status-value error">Pending</span>
                     </div>
                     <div class="status-item">
-                        <span class="status-label">Account</span>
+                        <span class="status-label">Account:</span>
                         <span id="oauthStatus" class="status-value error">Not Connected</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">PrestaShop:</span>
+                        <span id="prestashopHeaderStatus" class="status-value error">Not Connected</span>
                     </div>
                 </div>
             </div>
         </header>
 
-        <!-- Main Content Area - Full Screen Dashboard -->
-        <div class="dashboard-container">
-            <!-- Configuration Panel - Top Section -->
-            <div class="config-panel">
+        <!-- Configuration Panel - Collapsible -->
+        <div class="config-panel-wrapper">
+            <div class="config-panel-toggle" id="configPanelToggle">
+                <span class="toggle-icon">▼</span>
+                <span class="toggle-text">Configuration</span>
+                <div class="config-quick-status">
+                    <span id="allegroQuickStatus" class="quick-status-badge error">Allegro: Not Configured</span>
+                    <span id="prestashopQuickStatus" class="quick-status-badge error">PrestaShop: Not Configured</span>
+                </div>
+            </div>
+            <div class="config-panel" id="configPanel">
                 <div class="config-section">
                     <div class="config-header">
-                        <h2>Allegro API Configuration</h2>
-                        <span id="allegroConfigStatus" class="config-status">Not Configured</span>
+                        <div class="config-header-left">
+                            <h2>Allegro API Configuration</h2>
+                            <span id="allegroConfigStatus" class="config-status">Not Configured</span>
+                        </div>
                     </div>
                     <div class="config-content">
                         <div class="form-row">
@@ -60,10 +73,12 @@
 
                 <div class="config-section">
                     <div class="config-header">
-                        <h2>PrestaShop Configuration</h2>
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <span id="prestashopConfigStatus" class="config-status">Not Configured</span>
-                            <span id="prestashopSavedConfigInfo" class="config-status success" style="display: none;">Saved</span>
+                        <div class="config-header-left">
+                            <h2>PrestaShop Configuration</h2>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span id="prestashopConfigStatus" class="config-status">Not Configured</span>
+                                <span id="prestashopSavedConfigInfo" class="config-status success" style="display: none;">Saved</span>
+                            </div>
                         </div>
                     </div>
                     <div class="config-content">
@@ -77,54 +92,66 @@
                                 <input type="password" id="prestashopApiKey" placeholder="Enter PrestaShop API Key" autocomplete="off">
                             </div>
                         </div>
-                        <div class="form-row" style="margin-top: -5px; margin-bottom: -5px;">
-                            <div class="form-group" style="flex: 1; margin: 0;">
-                                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin: 0;">
-                                    <input type="checkbox" id="disableStockSyncToAllegro" style="width: auto;">
-                                    <span style="white-space: nowrap;">Disable PrestaShop → Allegro stock updates</span>
-                                </label>
-                            </div>
-                        </div>
                         <div class="form-actions">
                             <button id="testPrestashopBtn" class="btn btn-secondary">Connect</button>
                             <button id="clearPrestashopBtn" class="btn btn-secondary" style="display: none;">Disconnect</button>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; margin: 0; font-size: 0.75em;">
+                                <input type="checkbox" id="disableStockSyncToAllegro">
+                                <span style="white-space: nowrap;">Disable PrestaShop → Allegro stock updates</span>
+                            </label>
                         </div>
                         <div id="prestashopMessage" class="message" style="display: none;"></div>
                     </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Main Content Wrapper -->
-            <div class="main-content-wrapper">
-                <!-- Left Sidebar - Categories (compact with search & dropdown) -->
-                <aside class="sidebar">
-                    <div class="sidebar-header">
-                        <h2>Allegro Categories</h2>
-                        <div class="sidebar-header-sub">
-                            <input 
-                                type="text" 
-                                id="categorySearchInput" 
-                                class="category-search-input" 
-                                placeholder="Search category..."
-                                autocomplete="off">
-                        </div>
+        <!-- Main Content Wrapper -->
+        <div class="main-content-wrapper">
+            <!-- Left Sidebar - Categories -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h2>Allegro Categories</h2>
+                    <div class="sidebar-header-sub">
+                        <input 
+                            type="text" 
+                            id="categorySearchInput" 
+                            class="category-search-input" 
+                            placeholder="Search category..."
+                            autocomplete="off">
                     </div>
-                    <div class="categories-list" id="categoriesList"></div>
-                </aside>
+                </div>
+                <div class="categories-list" id="categoriesList"></div>
+            </aside>
 
-                <!-- Right Content Area - Products & Import -->
-                <main class="content-area">
-                    <!-- Offers Section -->
+            <!-- Right Content Area - Tabbed Navigation -->
+            <main class="content-area">
+                <!-- Tab Navigation -->
+                <div class="tab-navigation">
+                    <button class="tab-btn active" data-tab="offers">
+                        <span>Allegro Offers</span>
+                        <span id="tabOffersCount" class="tab-badge">0</span>
+                    </button>
+                    <button class="tab-btn" data-tab="imported">
+                        <span>Imported Products</span>
+                        <span id="tabImportedCount" class="tab-badge">0</span>
+                    </button>
+                    <button class="tab-btn" data-tab="categories">
+                        <span>Categories</span>
+                    </button>
+                    <button class="tab-btn" data-tab="csv">
+                        <span>CSV Export</span>
+                    </button>
+                </div>
+
+                <!-- Tab Content: Offers -->
+                <div class="tab-content active" id="tab-offers">
                     <div class="section-card">
                         <div class="section-header">
-                            <h2>Offers <span id="resultsCount" class="count-badge">0</span></h2>
-                            <div class="offers-search-wrapper">
-                                <input 
-                                    type="text" 
-                                    id="offerSearchInput" 
-                                    class="offers-search-input" 
-                                    placeholder="Search offers..."
-                                    autocomplete="off">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <h2>Allegro Offers</h2>
+                                <span id="resultsCount" class="count-badge">0</span>
+                                <button id="loadOffersBtn" class="btn btn-primary" disabled>Load Offers</button>
                             </div>
                             <div class="section-actions">
                                 <div class="form-group-inline">
@@ -135,7 +162,14 @@
                                         <option value="ENDED">Ended</option>
                                     </select>
                                 </div>
-                                <button id="loadOffersBtn" class="btn btn-primary" disabled>Load Offers</button>
+                                <div class="offers-search-wrapper">
+                                    <input 
+                                        type="text" 
+                                        id="offerSearchInput" 
+                                        class="offers-search-input" 
+                                        placeholder="Search offers..."
+                                        autocomplete="off">
+                                </div>
                                 <button id="clearBtn" class="btn btn-secondary" onclick="clearSearch()">Clear</button>
                                 <button id="importSelectedBtn" class="btn btn-success" disabled>Import Selected</button>
                             </div>
@@ -171,11 +205,14 @@
 
                         <div id="offersList" class="offers-grid"></div>
                     </div>
+                </div>
 
-                    <!-- Imported Products Section -->
+                <!-- Tab Content: Imported Products -->
+                <div class="tab-content" id="tab-imported">
                     <div class="section-card">
                         <div class="section-header">
-                            <h2>Imported Products <span id="importedCount" class="count-badge">0</span></h2>
+                            <h2>Imported Products</h2>
+                            <span id="importedCount" class="count-badge">0</span>
                             <div class="section-actions">
                                 <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; margin-right: 10px; cursor: pointer;">
                                     <span class="info-icon-wrapper" style="position: relative; display: inline-flex; align-items: center;">
@@ -202,8 +239,52 @@
                         </div>
                         <div id="importedList" class="imported-list"></div>
                     </div>
-                </main>
-            </div>
+                </div>
+
+                <!-- Tab Content: Categories -->
+                <div class="tab-content" id="tab-categories">
+                    <div class="section-card">
+                        <div class="section-header">
+                            <h2>Allegro Categories</h2>
+                            <div class="section-actions">
+                                <button id="reloadCategoriesBtn" class="btn btn-primary btn-small" disabled>Reload Categories</button>
+                            </div>
+                        </div>
+                        <div id="categoriesTabContent" class="categories-tab-content">
+                            <p class="info-text">Select a category from the sidebar to view details, or use the search to find specific categories.</p>
+                            <div id="categoryDetails" class="category-details"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content: CSV Export -->
+                <div class="tab-content" id="tab-csv">
+                    <div class="section-card">
+                        <div class="section-header">
+                            <h2>CSV Export</h2>
+                            <p class="section-description">Export your data to CSV files for backup, analysis, or import into other systems.</p>
+                        </div>
+                        <div class="csv-export-grid">
+                            <div class="csv-export-card">
+                            <h3>Export Categories</h3>
+                            <p>Export categories from your Allegro offers to a CSV file</p>
+                            <button id="exportCategoriesCsvBtn" class="btn btn-primary" disabled>Export Categories</button>
+                            </div>
+                            <div class="csv-export-card">
+                                <h3>Export Products</h3>
+                                <p>Export all imported products to a CSV file</p>
+                                <button id="exportProductsCsvBtn" class="btn btn-primary" disabled>Export Products</button>
+                            </div>
+                            <div class="csv-export-card">
+                                <h3>Export Combinations</h3>
+                                <p>Export product combinations and variants</p>
+                                <button id="exportCombinationsCsvBtn" class="btn btn-primary" disabled>Export Combinations</button>
+                            </div>
+                        </div>
+                        <div id="csvExportMessage" class="message" style="display: none; margin-top: 20px;"></div>
+                    </div>
+                </div>
+            </main>
         </div>
     </div>
 
