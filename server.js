@@ -1395,12 +1395,12 @@ app.get('/api/offers', async (req, res) => {
     // Try to fetch user's offers using OAuth token
     try {
       const params = {
-      limit: limit,
-      offset: offset
+        limit: limit,
+        offset: offset
       };
       const data = await allegroApiRequest('/sale/offers', params, true); // Use user token
-      
-      // Log sample offer structure to debug
+
+      // Log sample offer structure to debug (without extra detail calls)
       if (data.offers && data.offers.length > 0) {
         const sampleOffer = data.offers[0];
         console.log('Sample offer structure:', {
@@ -1411,47 +1411,12 @@ app.get('/api/offers', async (req, res) => {
           imageKeys: Object.keys(sampleOffer).filter(k => k.toLowerCase().includes('image'))
         });
       }
-      
-      // Enhance offers with full image data if missing
-      // The /sale/offers list endpoint may not return full images array
-      // Only fetch full details for offers that have primaryImage but no images array
-      // (suggesting there might be more images), and limit to first 20 to avoid performance issues
-      const offersToEnhance = (data.offers || []).slice(0, 20); // Limit to first 20 for performance
-      const enhancedOffers = await Promise.all((data.offers || []).map(async (offer, index) => {
-        // Check if offer has images array with multiple images
-        const hasImagesArray = offer.images && Array.isArray(offer.images) && offer.images.length > 0;
-        const hasPrimaryImage = offer.primaryImage && offer.primaryImage.url;
-        
-        // Only fetch full details if:
-        // 1. No images array exists
-        // 2. Has primaryImage (suggesting there might be more images)
-        // 3. Within the first 20 offers (to avoid performance issues)
-        if (!hasImagesArray && hasPrimaryImage && offer.id && index < 20) {
-          try {
-            const fullOfferData = await allegroApiRequest(`/sale/offers/${offer.id}`, {}, true);
-            
-            // Merge images data from full offer if available
-            if (fullOfferData.images && Array.isArray(fullOfferData.images) && fullOfferData.images.length > 0) {
-              offer.images = fullOfferData.images;
-              console.log(`Fetched full offer details for ${offer.id}, found ${fullOfferData.images.length} images`);
-            } else if (fullOfferData.primaryImage && !offer.primaryImage) {
-              // At least ensure primaryImage is set
-              offer.primaryImage = fullOfferData.primaryImage;
-            }
-          } catch (fetchError) {
-            // Silently continue if fetching full details fails
-            console.warn(`Failed to fetch full details for offer ${offer.id}:`, fetchError.message);
-          }
-        }
-        
-        return offer;
-      }));
-      
+
       // Normalize response structure for frontend according to API docs
       // API returns: { "offers": [...], "count": 1, "totalCount": 1234 }
       const normalizedData = {
-        offers: enhancedOffers,
-        count: data.count || (enhancedOffers ? enhancedOffers.length : 0),
+        offers: data.offers || [],
+        count: data.count || ((data.offers || []).length),
         totalCount: data.totalCount || data.count || 0
       };
       
@@ -1569,33 +1534,12 @@ app.get('/api/offers', async (req, res) => {
   }
 });
 
-/**
- * Get offer details by ID
- */
-app.get('/api/offers/:offerId', async (req, res) => {
-  try {
-    const { offerId } = req.params;
-    const data = await allegroApiRequest(`/sale/offers/${offerId}`);
-    
-    res.json({
-      success: true,
-      data: data
-    });
-  } catch (error) {
-    // Convert technical error messages to user-friendly ones
-    let errorMessage = error.message;
-    if (error.response?.status === 401) {
-      errorMessage = 'Invalid credentials. Please check your Client ID and Client Secret.';
-    } else if (error.response?.status) {
-      errorMessage = error.response?.data?.message || error.response?.data?.error || errorMessage;
-    }
-    
-    res.status(error.response?.status || 500).json({
-      success: false,
-      error: errorMessage
-    });
-  }
-});
+// NOTE: Former /api/offers/:offerId endpoint removed because
+// Allegro blocked access to /sale/offers/{id}. All required
+// data is now taken directly from the list response in
+// /api/offers above. If you need additional details in the
+// future, consider migrating to the newer /sale/product-offers
+// resources described in Allegro's documentation.
 
 /**
  * Get product details by ID (including images)
@@ -2208,26 +2152,10 @@ app.post('/api/prestashop/products', async (req, res) => {
       });
     }
 
-    // Fetch full offer details to get complete image data
-    // The /sale/offers list endpoint may not return full image arrays
-    try {
-      const fullOfferData = await allegroApiRequest(`/sale/offers/${offer.id}`, {}, true);
-      
-      // Merge full offer data with the offer from request (full offer takes precedence)
-      // This ensures we have complete image data
-      offer = {
-        ...offer,
-        ...fullOfferData,
-        // Preserve some fields from original offer if they're not in full offer
-        id: offer.id,
-        name: offer.name || fullOfferData.name
-      };
-      
-      console.log(`Fetched full offer details for offer ${offer.id}, found ${fullOfferData.images?.length || 0} images`);
-    } catch (fetchError) {
-      console.warn(`Failed to fetch full offer details for ${offer.id}, using provided offer data:`, fetchError.message);
-      // Continue with the offer data provided - it might still have images
-    }
+    // Allegro has blocked direct access to /sale/offers/{id} resources,
+    // so we now rely solely on the offer object passed from the client.
+    // The list response already includes primaryImage and often images;
+    // that data is forwarded as-is to PrestaShop.
 
     // Extract product data from Allegro offer
     const price = offer.sellingMode?.price?.amount || offer.price || 0;
