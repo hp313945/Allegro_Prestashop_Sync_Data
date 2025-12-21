@@ -1431,6 +1431,7 @@ input[type="checkbox"] {
     transition: all 0.3s;
     display: flex;
     flex-direction: row;
+    flex-wrap: wrap;
     overflow: visible;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
     min-height: 100px;
@@ -1953,6 +1954,129 @@ input[type="checkbox"] {
     color: #666;
     font-style: italic;
     font-size: 0.7em;
+}
+
+/* Description Section */
+.offer-description {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #f0f0f0;
+}
+
+.offer-description-full-width {
+    width: 100%;
+    flex-basis: 100%;
+    padding: 8px;
+    margin-top: 8px;
+    border-top: 1px solid #f0f0f0;
+    order: 999;
+}
+
+.offer-description-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    gap: 8px;
+}
+
+.offer-description-header strong {
+    font-size: 0.7em;
+    color: #333;
+    font-weight: 600;
+}
+
+.description-toggle-btn {
+    background: #1a73e8;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.65em;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s ease;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+}
+
+.description-toggle-btn:hover {
+    background: #1557b0;
+}
+
+.description-toggle-btn:active {
+    transform: scale(0.95);
+}
+
+.description-toggle-btn .toggle-icon {
+    font-size: 0.9em;
+    display: inline-block;
+    transition: transform 0.2s ease;
+    line-height: 1;
+}
+
+.offer-description-preview {
+    font-size: 0.7em;
+    color: #555;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.offer-description-preview.offer-description-html {
+    white-space: normal;
+}
+
+.offer-description-preview.offer-description-html img {
+    max-width: 100%;
+    height: auto;
+    margin: 4px 0;
+}
+
+.offer-description-preview.offer-description-html p {
+    margin: 4px 0;
+}
+
+.offer-description-preview.offer-description-html ul,
+.offer-description-preview.offer-description-html ol {
+    margin: 4px 0;
+    padding-left: 20px;
+}
+
+.offer-description-preview.offer-description-html li {
+    margin: 2px 0;
+}
+
+.offer-description-full {
+    font-size: 0.7em;
+    color: #555;
+    line-height: 1.5;
+    white-space: normal;
+    word-wrap: break-word;
+    margin-top: 6px;
+}
+
+.offer-description-full img {
+    max-width: 100%;
+    height: auto;
+    margin: 4px 0;
+}
+
+.offer-description-full p {
+    margin: 4px 0;
+}
+
+.offer-description-full ul,
+.offer-description-full ol {
+    margin: 4px 0;
+    padding-left: 20px;
+}
+
+.offer-description-full li {
+    margin: 2px 0;
 }
 
 .offer-actions {

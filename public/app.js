@@ -22,6 +22,8 @@ let currentStatusFilter = 'ALL'; // ALL | ACTIVE | ENDED
 let categoryTreePath = []; // Array of { id, name } from root to current parent
 let categoryTreeCache = {}; // Cache of categories per parent: { [parentIdOrRoot]: categories[] }
 let categoryTreeInitialized = false; // Avoid reloading root tree unnecessarily
+let categoryTreeWithProducts = {}; // Tree structure with only categories that have products: { [categoryId]: { id, name, count, children: {}, parent: id } }
+let categoryProductCounts = {}; // Map of category ID to product count: { [categoryId]: count }
 
 // PrestaShop state
 let prestashopConfigured = false;
@@ -47,8 +49,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Update button states on initialization
     updateButtonStates();
 
-    // Try to restore previously saved offers and categories from localStorage
-    loadOffersAndCategoriesFromStorage();
+    // Data will be loaded fresh from Allegro API when user clicks "Load My Offers"
 });
 
 // Automatically load offers when everything is already configured
@@ -1808,17 +1809,17 @@ async function displayOffersPage() {
     
     // Fetch full product details for products without images
     // This is done asynchronously to not block the UI
-    const productsWithoutImages = pageOffers.filter(p => {
-        // Check if product has no image in primaryImage or images array
-        const hasPrimaryImage = p.primaryImage && p.primaryImage.url;
-        const hasImages = p.images && Array.isArray(p.images) && p.images.length > 0;
-        return !hasPrimaryImage && !hasImages;
-    });
-    if (productsWithoutImages.length > 0) {
-        console.log(`Fetching details for ${productsWithoutImages.length} products without images...`);
-        // Fetch details for first few products to avoid too many requests
-        const productsToFetch = productsWithoutImages.slice(0, 10);
-        await Promise.all(productsToFetch.map(product => fetchProductDetails(product.id)));
+    // Fetch product details for all products to get descriptions and additional images
+    // Limit to current page to avoid too many API calls
+    const productsToFetch = pageOffers.slice(0, 30); // Fetch details for up to 30 products per page
+    if (productsToFetch.length > 0) {
+        console.log(`Fetching details for ${productsToFetch.length} products to get descriptions...`);
+        // Fetch details in parallel (but limit concurrency to avoid overwhelming the API)
+        const batchSize = 5;
+        for (let i = 0; i < productsToFetch.length; i += batchSize) {
+            const batch = productsToFetch.slice(i, i + batchSize);
+            await Promise.all(batch.map(product => fetchProductDetails(product.id)));
+        }
     }
     
     // Initialize automatic image rotation for products with multiple images
@@ -1827,63 +1828,239 @@ async function displayOffersPage() {
     updatePagination();
 }
 
-// Fetch full product details including images
-async function fetchProductDetails(productId) {
+// Fetch full offer details including images and descriptions
+// Only fetches details for offers that belong to the authenticated user
+async function fetchProductDetails(offerId) {
     try {
-        const response = await fetch(`${API_BASE}/api/products/${productId}`);
-        if (!response.ok) return;
+        // Verify this offer is in the user's offers list before fetching
+        // This prevents trying to fetch details for offers that don't belong to the user
+        const isUserOffer = allLoadedOffers.some(offer => offer.id === offerId || offer.id?.toString() === offerId?.toString());
+        if (!isUserOffer) {
+            console.log(`Skipping offer ${offerId} - not found in user's offers list`);
+            return;
+        }
         
-        const result = await response.json();
-        if (result.success && result.data) {
-            const product = result.data;
-            const card = document.querySelector(`[data-product-id="${productId}"]`);
+        // Use /api/products/{offerId} which uses /sale/product-offers/{offerId}
+        // This endpoint only works for the user's own offers
+        const response = await fetch(`${API_BASE}/api/products/${offerId}`);
+        let product = null;
+        
+        if (response.ok) {
+            const result = await response.json();
+            if (result.success && result.data) {
+                product = result.data;
+            }
+        } else if (response.status === 403) {
+            // Access denied - this offer doesn't belong to the user
+            // Silently skip it (this is expected for offers not owned by the user)
+            console.log(`Skipping offer ${offerId} - access denied (not your offer)`);
+            return;
+        } else {
+            // For other errors, try the offers endpoint as fallback (only if it's a user offer)
+            if (isUserOffer) {
+                const offerResponse = await fetch(`${API_BASE}/api/offers/${offerId}`);
+                if (offerResponse.ok) {
+                    const offerResult = await offerResponse.json();
+                    if (offerResult.success && offerResult.data) {
+                        product = offerResult.data;
+                    }
+                }
+            }
+        }
+        
+        if (product) {
+            const card = document.querySelector(`[data-product-id="${offerId}"]`);
             if (!card) return;
             
-            // Count ALL available images from Allegro (same logic as createOfferCard)
+            // Extract description from offer/product details
+            // New format: description.sections[].items[] where items can be TEXT (with content) or IMAGE (with url)
+            let productDescription = '';
+            let descriptionHtml = '';
+            
+            // Check for new format: description.sections[].items[]
+            if (product.description && product.description.sections && Array.isArray(product.description.sections)) {
+                // Process all sections and their items
+                product.description.sections.forEach(section => {
+                    if (section.items && Array.isArray(section.items)) {
+                        section.items.forEach(item => {
+                            if (item.type === 'TEXT' && item.content) {
+                                // TEXT items contain HTML content
+                                descriptionHtml += item.content;
+                            } else if (item.type === 'IMAGE' && item.url) {
+                                // IMAGE items in description - can be included as <img> tags
+                                descriptionHtml += `<img src="${escapeHtml(item.url)}" alt="Product image" style="max-width: 100%; height: auto; margin: 10px 0;">`;
+                            }
+                        });
+                    }
+                });
+                if (descriptionHtml) {
+                    productDescription = descriptionHtml;
+                }
+            } else if (product.description && typeof product.description === 'string') {
+                productDescription = product.description;
+            } else if (product.descriptionHtml) {
+                productDescription = product.descriptionHtml;
+            } else if (product.product?.description) {
+                productDescription = product.product.description;
+            } else if (product.product?.descriptionHtml) {
+                productDescription = product.product.descriptionHtml;
+            } else if (product.details?.description) {
+                productDescription = product.details.description;
+            } else if (product.publication?.description) {
+                productDescription = product.publication.description;
+            } else if (product.sellingMode?.description) {
+                productDescription = product.sellingMode.description;
+            } else if (product.sections && Array.isArray(product.sections)) {
+                // Some Allegro endpoints return description in sections array
+                const descriptionSection = product.sections.find(s => 
+                    s.type === 'DESCRIPTION' || 
+                    s.type === 'TEXT' || 
+                    s.type === 'description' ||
+                    s.type === 'text'
+                );
+                if (descriptionSection) {
+                    if (descriptionSection.items && Array.isArray(descriptionSection.items)) {
+                        productDescription = descriptionSection.items
+                            .map(item => item.content || item.text || item.html || '')
+                            .filter(text => text.trim().length > 0)
+                            .join('\n');
+                    } else if (descriptionSection.content) {
+                        productDescription = descriptionSection.content;
+                    } else if (descriptionSection.text) {
+                        productDescription = descriptionSection.text;
+                    } else if (descriptionSection.html) {
+                        productDescription = descriptionSection.html;
+                    }
+                }
+            }
+            
+            // Update description in card if we found one and card doesn't already have it
+            // Only process if we have a non-empty description
+            if (productDescription) {
+                // Helper function to strip HTML tags and get plain text preview
+                function stripHtml(html) {
+                    if (!html) return '';
+                    if (typeof document !== 'undefined') {
+                        try {
+                            const tmp = document.createElement('DIV');
+                            tmp.innerHTML = html;
+                            return tmp.textContent || tmp.innerText || '';
+                        } catch (e) {
+                            // Fallback to regex if DOM method fails
+                        }
+                    }
+                    return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').trim();
+                }
+                
+                const fullTextDescription = stripHtml(productDescription).trim();
+                const hasValidDescription = fullTextDescription.length > 0;
+                
+                if (hasValidDescription) {
+                    let existingDescription = card.querySelector('.offer-description');
+                    const isHtmlDescription = productDescription.includes('<');
+                    const descriptionPreview = fullTextDescription.substring(0, 30);
+                    const hasMoreDescription = fullTextDescription.length > 30;
+                    
+                    if (!existingDescription) {
+                        // Insert description at the end of the card to span full width
+                        // Find the offer-content section and insert description after the entire card content
+                        const offerContent = card.querySelector('.offer-content');
+                        if (offerContent && offerContent.parentNode) {
+                            const descriptionHtml = `
+                                <div class="offer-description offer-description-full-width" data-product-id="${offerId}">
+                                    <div class="offer-description-header">
+                                        <strong>Description:</strong>
+                                        ${hasMoreDescription ? `<button class="description-toggle-btn" onclick="toggleDescription('${offerId}')" data-expanded="false" title="Show more"><span class="toggle-icon">▼</span></button>` : ''}
+                                    </div>
+                                    ${hasMoreDescription ? `
+                                        <div class="offer-description-preview">${escapeHtml(descriptionPreview)}...</div>
+                                        <div class="offer-description-full" style="display: none;">
+                                            ${isHtmlDescription ? productDescription : escapeHtml(productDescription)}
+                                        </div>
+                                    ` : `
+                                        <div class="offer-description-preview ${isHtmlDescription ? 'offer-description-html' : ''}">
+                                            ${isHtmlDescription ? productDescription : escapeHtml(productDescription)}
+                                        </div>
+                                    `}
+                                </div>
+                            `;
+                            // Insert after the offer-content div, so it spans full card width
+                            offerContent.insertAdjacentHTML('afterend', descriptionHtml);
+                        }
+                    } else {
+                        // Update existing description with full HTML if we have it
+                        const previewEl = existingDescription.querySelector('.offer-description-preview');
+                        const fullEl = existingDescription.querySelector('.offer-description-full');
+                        const toggleBtn = existingDescription.querySelector('.description-toggle-btn');
+                        
+                        if (previewEl && !fullEl) {
+                            // No "full" version exists - update preview with full content
+                            previewEl.className = `offer-description-preview ${isHtmlDescription ? 'offer-description-html' : ''}`;
+                            previewEl.innerHTML = isHtmlDescription ? productDescription : escapeHtml(productDescription);
+                        } else if (fullEl) {
+                            // Update full description
+                            fullEl.innerHTML = isHtmlDescription ? productDescription : escapeHtml(productDescription);
+                            // Update preview if it exists
+                            if (previewEl) {
+                                previewEl.textContent = descriptionPreview + (hasMoreDescription ? '...' : '');
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Extract ALL images from the product response
+            // New format: images[] is an array of image URLs
             let imageUrls = [];
             let imageUrl = '';
             
-            // Check primaryImage first (Allegro /sale/offers format)
-            if (product.primaryImage && product.primaryImage.url) {
-                imageUrls.push(product.primaryImage.url);
-                imageUrl = product.primaryImage.url;
-            }
-            
-            // Check images array
+            // Check images array first (new format from /sale/product-offers endpoint)
             if (product.images && Array.isArray(product.images)) {
                 product.images.forEach(img => {
                     let imgUrl = '';
-                    if (typeof img === 'object' && img !== null) {
-                        imgUrl = img.url || img.uri || img.path || img.src || img.link || '';
-                    } else if (typeof img === 'string' && img.startsWith('http')) {
+                    if (typeof img === 'string' && img.startsWith('http')) {
+                        // Direct URL string
                         imgUrl = img;
+                    } else if (typeof img === 'object' && img !== null) {
+                        // Object with url property
+                        imgUrl = img.url || img.uri || img.path || img.src || img.link || '';
                     }
                     if (imgUrl && !imageUrls.includes(imgUrl)) {
                         imageUrls.push(imgUrl);
                     }
                 });
-                if (!imageUrl && imageUrls.length > 0) {
-                    imageUrl = imageUrls[0];
+            }
+            
+            // Check primaryImage (fallback for older format)
+            if (product.primaryImage && product.primaryImage.url) {
+                const primaryUrl = product.primaryImage.url;
+                if (!imageUrls.includes(primaryUrl)) {
+                    imageUrls.unshift(primaryUrl); // Add to beginning
                 }
             }
             
-            // Count total images (limit to 5 as per backend logic)
-            const totalImageCount = Math.min(imageUrls.length, 5);
+            // Set first image as main image
+            if (imageUrls.length > 0) {
+                imageUrl = imageUrls[0];
+            }
             
-                    // Update the card if we found an image
+            // Use all images (no limit for product-offers endpoint)
+            const totalImageCount = imageUrls.length;
+            
+            // Update the card if we found an image
             if (imageUrl) {
                 const imageWrapper = card.querySelector('.offer-image-wrapper');
                 if (imageWrapper) {
-                    // Store image URLs in card data attribute for rotation
-                    const imageUrlsJson = JSON.stringify(imageUrls.slice(0, 5));
+                    // Store ALL image URLs in card data attribute for rotation
+                    const imageUrlsJson = JSON.stringify(imageUrls);
                     card.setAttribute('data-image-urls', imageUrlsJson);
-                    const productId = product.id || card.getAttribute('data-product-id');
+                    const productIdForImage = product.id || offerId || card.getAttribute('data-product-id');
                     
                     imageWrapper.innerHTML = `
                         <img src="${imageUrl}" alt="${escapeHtml(product.name || 'Product')}" class="offer-image ${totalImageCount > 1 ? 'offer-image-clickable' : ''}" 
                              loading="lazy"
                              data-current-image-index="0"
-                             ${totalImageCount > 1 ? `onclick="navigateImage(event, '${productId}', 'next')" title="Click to see next image"` : ''}
+                             ${totalImageCount > 1 ? `onclick="navigateImage(event, '${productIdForImage}', 'next')" title="Click to see next image"` : ''}
                              onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
                         ${totalImageCount > 0 ? `
                             <div class="offer-image-count-badge" title="${totalImageCount} image${totalImageCount > 1 ? 's' : ''} available from Allegro${totalImageCount > 1 ? ' - Click image to navigate' : ''}">
@@ -1892,8 +2069,8 @@ async function fetchProductDetails(productId) {
                             </div>
                         ` : ''}
                         ${totalImageCount > 1 ? `
-                            <button class="offer-image-nav-btn offer-image-nav-prev" onclick="navigateImage(event, '${productId}', 'prev')" title="Previous image">‹</button>
-                            <button class="offer-image-nav-btn offer-image-nav-next" onclick="navigateImage(event, '${productId}', 'next')" title="Next image">›</button>
+                            <button class="offer-image-nav-btn offer-image-nav-prev" onclick="navigateImage(event, '${productIdForImage}', 'prev')" title="Previous image">‹</button>
+                            <button class="offer-image-nav-btn offer-image-nav-next" onclick="navigateImage(event, '${productIdForImage}', 'next')" title="Next image">›</button>
                         ` : ''}
                         <div class="offer-image-placeholder" style="display: none;">
                             <span>No Image</span>
@@ -1904,17 +2081,39 @@ async function fetchProductDetails(productId) {
                     if (totalImageCount > 1) {
                         const imgElement = imageWrapper.querySelector('.offer-image');
                         if (imgElement) {
-                            startImageRotation(card, imageUrls.slice(0, 5), imgElement);
+                            startImageRotation(card, imageUrls, imgElement);
                         }
                     }
                 }
             }
+            
+            // IMPORTANT: Update the offer in importedOffers array with full product data
+            // This ensures that when exporting, we have the complete description and images
+            const importedOfferIndex = importedOffers.findIndex(imp => imp.id === offerId || imp.id?.toString() === offerId?.toString());
+            if (importedOfferIndex !== -1) {
+                // Merge the full product data into the imported offer
+                // Preserve existing fields but update with full product details
+                const existingOffer = importedOffers[importedOfferIndex];
+                importedOffers[importedOfferIndex] = {
+                    ...existingOffer,
+                    ...product,
+                    // Ensure description structure is preserved
+                    description: product.description || existingOffer.description,
+                    // Ensure all images are included
+                    images: product.images || existingOffer.images,
+                    primaryImage: product.primaryImage || existingOffer.primaryImage,
+                    // Store the full product object if available
+                    product: product.product || product
+                };
+                // Save updated imported offers
+                saveImportedOffers();
+                console.log(`Updated imported offer ${offerId} with full product details (description and images)`);
+            }
         }
 
-        // Persist offers and categories locally so they can be restored on refresh
-        saveOffersAndCategories();
+        // Data is always loaded fresh from Allegro API, no localStorage caching
     } catch (error) {
-        console.error(`Error fetching product details for ${productId}:`, error);
+        console.error(`Error fetching product details for ${offerId}:`, error);
     }
 }
 
@@ -2099,7 +2298,7 @@ function createOfferCard(product) {
                 if (name && name !== 'N/A') {
                     categoryNameCache[categoryId] = name;
                     // Update the card if it's still visible
-                    const card = document.querySelector(`[data-product-id="${productId}"]`);
+                    const card = document.querySelector(`[data-product-id="${offerId}"]`);
                     if (card) {
                         const categoryEl = card.querySelector('.offer-category');
                         if (categoryEl) {
@@ -2238,6 +2437,72 @@ function createOfferCard(product) {
     // Store image URLs in JSON format for rotation (limit to 5)
     const imageUrlsJson = JSON.stringify(imageUrls.slice(0, 5));
     
+    // Extract description from product
+    // Check multiple possible locations where Allegro API might store descriptions
+    let productDescription = '';
+    if (product.description) {
+        productDescription = product.description;
+    } else if (product.descriptionHtml) {
+        productDescription = product.descriptionHtml;
+    } else if (product.product?.description) {
+        productDescription = product.product.description;
+    } else if (product.product?.descriptionHtml) {
+        productDescription = product.product.descriptionHtml;
+    } else if (product.details?.description) {
+        productDescription = product.details.description;
+    } else if (product.publication?.description) {
+        productDescription = product.publication.description;
+    } else if (product.sellingMode?.description) {
+        productDescription = product.sellingMode.description;
+    } else if (product.sections && Array.isArray(product.sections)) {
+        // Some Allegro endpoints return description in sections array
+        const descriptionSection = product.sections.find(s => 
+            s.type === 'DESCRIPTION' || 
+            s.type === 'TEXT' || 
+            s.type === 'description' ||
+            s.type === 'text'
+        );
+        if (descriptionSection) {
+            if (descriptionSection.items && Array.isArray(descriptionSection.items)) {
+                productDescription = descriptionSection.items
+                    .map(item => item.content || item.text || item.html || '')
+                    .filter(text => text.trim().length > 0)
+                    .join('\n');
+            } else if (descriptionSection.content) {
+                productDescription = descriptionSection.content;
+            } else if (descriptionSection.text) {
+                productDescription = descriptionSection.text;
+            } else if (descriptionSection.html) {
+                productDescription = descriptionSection.html;
+            }
+        }
+    }
+    
+    // Helper function to strip HTML tags and get plain text preview
+    function stripHtml(html) {
+        if (!html) return '';
+        // Use DOM method if available (more reliable)
+        if (typeof document !== 'undefined') {
+            try {
+                const tmp = document.createElement('DIV');
+                tmp.innerHTML = html;
+                return tmp.textContent || tmp.innerText || '';
+            } catch (e) {
+                // Fallback to regex if DOM method fails
+            }
+        }
+        // Fallback: simple regex to remove HTML tags
+        return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').trim();
+    }
+    
+    // Get a preview of the description (first 30 characters)
+    // Only process if we have a non-empty description
+    const fullTextDescription = productDescription ? stripHtml(productDescription).trim() : '';
+    const hasValidDescription = fullTextDescription.length > 0;
+    const descriptionPreview = hasValidDescription ? fullTextDescription.substring(0, 30) : '';
+    const hasMoreDescription = fullTextDescription.length > 30;
+    const isHtmlDescription = productDescription && productDescription.includes('<');
+    
     return `
         <div class="offer-card" data-product-id="${productId}" data-image-urls='${imageUrlsJson}'>
             <div class="offer-left-column">
@@ -2371,8 +2636,50 @@ function createOfferCard(product) {
                     </div>
                 </div>
             </div>
+            ${hasValidDescription ? `
+                <div class="offer-description offer-description-full-width" data-product-id="${productId}">
+                    <div class="offer-description-header">
+                        <strong>Description:</strong>
+                        ${hasMoreDescription ? `<button class="description-toggle-btn" onclick="toggleDescription('${productId}')" data-expanded="false" title="Show more"><span class="toggle-icon">▼</span></button>` : ''}
+                    </div>
+                    <div class="offer-description-preview">${escapeHtml(descriptionPreview)}${hasMoreDescription ? '...' : ''}</div>
+                    ${hasMoreDescription ? `
+                        <div class="offer-description-full" style="display: none;">
+                            ${isHtmlDescription ? productDescription : escapeHtml(productDescription)}
+                        </div>
+                    ` : ''}
+                </div>
+            ` : ''}
         </div>
     `;
+}
+
+// Toggle description visibility
+function toggleDescription(productId) {
+    const descriptionEl = document.querySelector(`.offer-description[data-product-id="${productId}"]`);
+    if (!descriptionEl) return;
+    
+    const previewEl = descriptionEl.querySelector('.offer-description-preview');
+    const fullEl = descriptionEl.querySelector('.offer-description-full');
+    const toggleBtn = descriptionEl.querySelector('.description-toggle-btn');
+    
+    if (!fullEl || !toggleBtn) return;
+    
+    const isExpanded = toggleBtn.dataset.expanded === 'true';
+    
+    if (isExpanded) {
+        previewEl.style.display = 'block';
+        fullEl.style.display = 'none';
+        toggleBtn.innerHTML = '<span class="toggle-icon">▼</span>';
+        toggleBtn.title = 'Show more';
+        toggleBtn.dataset.expanded = 'false';
+    } else {
+        previewEl.style.display = 'none';
+        fullEl.style.display = 'block';
+        toggleBtn.innerHTML = '<span class="toggle-icon">▲</span>';
+        toggleBtn.title = 'Show less';
+        toggleBtn.dataset.expanded = 'true';
+    }
 }
 
 // Update pagination
@@ -2830,17 +3137,52 @@ function extractDescription(offer) {
         return offer.description;
     }
     
+    if (offer.descriptionHtml) {
+        return offer.descriptionHtml;
+    }
+    
     if (offer.product?.description) {
         return offer.product.description;
+    }
+    
+    if (offer.product?.descriptionHtml) {
+        return offer.product.descriptionHtml;
     }
     
     if (offer.details?.description) {
         return offer.details.description;
     }
     
-    // Check for HTML description
-    if (offer.descriptionHtml) {
-        return offer.descriptionHtml;
+    if (offer.publication?.description) {
+        return offer.publication.description;
+    }
+    
+    if (offer.sellingMode?.description) {
+        return offer.sellingMode.description;
+    }
+    
+    // Check sections array
+    if (offer.sections && Array.isArray(offer.sections)) {
+        const descriptionSection = offer.sections.find(s => 
+            s.type === 'DESCRIPTION' || 
+            s.type === 'TEXT' || 
+            s.type === 'description' ||
+            s.type === 'text'
+        );
+        if (descriptionSection) {
+            if (descriptionSection.items && Array.isArray(descriptionSection.items)) {
+                return descriptionSection.items
+                    .map(item => item.content || item.text || item.html || '')
+                    .filter(text => text.trim().length > 0)
+                    .join('\n');
+            } else if (descriptionSection.content) {
+                return descriptionSection.content;
+            } else if (descriptionSection.text) {
+                return descriptionSection.text;
+            } else if (descriptionSection.html) {
+                return descriptionSection.html;
+            }
+        }
     }
     
     return '';
@@ -3066,6 +3408,206 @@ async function checkPrestashopStatus() {
     }
 }
 
+/**
+ * Sync categories to PrestaShop after loading from Allegro
+ * Creates categories in PrestaShop with proper tree structure (parent-child relationships)
+ * Does not create categories that already exist
+ */
+async function syncCategoriesToPrestashop() {
+    // Check if PrestaShop is configured and authorized
+    if (!prestashopConfigured || !prestashopAuthorized) {
+        console.log('PrestaShop not configured or not authorized, skipping category sync');
+        return;
+    }
+
+    // Check if we have categories to sync
+    if (!allCategories || allCategories.length === 0) {
+        console.log('No categories to sync to PrestaShop');
+        return;
+    }
+
+    console.log(`Starting sync of ${allCategories.length} categories to PrestaShop with tree structure...`);
+
+    // Map to store Allegro category ID -> PrestaShop category ID
+    const categoryIdMap = new Map();
+    // Map to store category name + parent -> PrestaShop category ID (for finding existing categories)
+    // Key format: "name|parentId" to handle same name under different parents
+    const categoryNameParentMap = new Map();
+    
+    let createdCount = 0;
+    let existingCount = 0;
+    let errorCount = 0;
+
+    // Step 1: Collect all unique categories from all paths (including parents)
+    const allCategoryNodes = new Map(); // Map<categoryId, {id, name, parentId, level}>
+    const processedPaths = new Set();
+    
+    // Fetch parent paths for all categories
+    for (const category of allCategories) {
+        // Skip if category doesn't have a valid name
+        if (!category.name || category.name === `Category ${category.id}` || category.name === 'N/A') {
+            continue;
+        }
+
+        const categoryId = String(category.id);
+        const pathKey = `path_${categoryId}`;
+        
+        if (processedPaths.has(pathKey)) {
+            continue;
+        }
+
+        try {
+            // Fetch the full parent path for this category
+            const path = await fetchCategoryPath(categoryId);
+            
+            if (path && path.length > 0) {
+                // Add all categories in the path (including parents)
+                for (let i = 0; i < path.length; i++) {
+                    const pathNode = path[i];
+                    const pathNodeId = String(pathNode.id);
+                    
+                    // Only add if not already processed
+                    if (!allCategoryNodes.has(pathNodeId)) {
+                        allCategoryNodes.set(pathNodeId, {
+                            id: pathNodeId,
+                            name: pathNode.name,
+                            parentId: i > 0 ? String(path[i - 1].id) : null,
+                            level: i
+                        });
+                    }
+                }
+            } else {
+                // If no path found, treat as root level category
+                if (!allCategoryNodes.has(categoryId)) {
+                    allCategoryNodes.set(categoryId, {
+                        id: categoryId,
+                        name: category.name,
+                        parentId: null,
+                        level: 0
+                    });
+                }
+            }
+            
+            processedPaths.add(pathKey);
+        } catch (error) {
+            console.error(`Error fetching path for category ${categoryId}:`, error);
+            // Still add the category itself even if path fetch fails
+            if (!allCategoryNodes.has(categoryId)) {
+                allCategoryNodes.set(categoryId, {
+                    id: categoryId,
+                    name: category.name,
+                    parentId: null,
+                    level: 0
+                });
+            }
+        }
+    }
+
+    // Step 2: Group categories by level for proper creation order
+    const categoriesByLevel = {};
+    
+    for (const [categoryId, categoryNode] of allCategoryNodes) {
+        const level = categoryNode.level;
+        if (!categoriesByLevel[level]) {
+            categoriesByLevel[level] = [];
+        }
+        categoriesByLevel[level].push(categoryNode);
+    }
+
+    // Step 3: Create categories level by level (parents before children)
+    const levels = Object.keys(categoriesByLevel).map(Number).sort((a, b) => a - b);
+    
+    for (const level of levels) {
+        const categoriesAtLevel = categoriesByLevel[level];
+        
+        for (const categoryNode of categoriesAtLevel) {
+            const categoryName = categoryNode.name;
+            const allegroCategoryId = categoryNode.id;
+            const allegroParentId = categoryNode.parentId;
+            
+            // Determine PrestaShop parent ID
+            let prestashopParentId = 2; // Default to Home (ID: 2)
+            
+            if (allegroParentId && categoryIdMap.has(allegroParentId)) {
+                // Use mapped PrestaShop parent ID (parent was created in previous level)
+                prestashopParentId = categoryIdMap.get(allegroParentId);
+            } else if (allegroParentId) {
+                // Parent should have been created in a previous level
+                // If not found in map, it might already exist in PrestaShop or wasn't processed yet
+                // Since we process level by level, if parent is not in map, use Home as fallback
+                // The backend API will handle finding existing categories by name+parent correctly
+                console.warn(`Parent category ${allegroParentId} not found in map for "${categoryName}", using Home as parent`);
+                prestashopParentId = 2; // Fallback to Home
+            }
+
+            // Check if we've already processed a category with the same name and parent in this sync session
+            // This prevents duplicate API calls for the same category
+            const categoryKey = `${categoryName}|${prestashopParentId}`;
+            if (categoryNameParentMap.has(categoryKey)) {
+                // Category with same name and parent already processed, use existing mapping
+                const existingPrestashopId = categoryNameParentMap.get(categoryKey);
+                categoryIdMap.set(allegroCategoryId, existingPrestashopId);
+                existingCount++;
+                console.log(`Category "${categoryName}" (Parent: ${prestashopParentId}) already processed in this sync session (ID: ${existingPrestashopId}), skipping API call`);
+                continue;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/prestashop/categories`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: categoryName,
+                        idParent: prestashopParentId,
+                        active: 1
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success && result.category && result.category.id) {
+                    const prestashopCategoryId = result.category.id;
+                    
+                    // Store mapping using composite key (name + parent) to handle duplicates
+                    const categoryKey = `${categoryName}|${prestashopParentId}`;
+                    categoryIdMap.set(allegroCategoryId, prestashopCategoryId);
+                    categoryNameParentMap.set(categoryKey, prestashopCategoryId);
+                    
+                    if (result.existing) {
+                        existingCount++;
+                        console.log(`Category "${categoryName}" already exists in PrestaShop (ID: ${prestashopCategoryId}, Parent: ${prestashopParentId})`);
+                    } else {
+                        createdCount++;
+                        console.log(`Created category "${categoryName}" in PrestaShop (ID: ${prestashopCategoryId}, Parent: ${prestashopParentId})`);
+                    }
+                } else {
+                    errorCount++;
+                    console.error(`Failed to sync category "${categoryName}":`, result.error || 'Unknown error');
+                }
+                
+                // Small delay to avoid overwhelming the API
+                await new Promise(resolve => setTimeout(resolve, 100));
+            } catch (error) {
+                errorCount++;
+                console.error(`Error syncing category "${categoryName}":`, error);
+            }
+        }
+    }
+
+    // Show summary
+    if (createdCount > 0 || existingCount > 0 || errorCount > 0) {
+        const message = `Category sync completed: ${createdCount} created, ${existingCount} already existed, ${errorCount} errors`;
+        console.log(message);
+        
+        // Show toast notification if there were results
+        if (createdCount > 0 || errorCount > 0) {
+            showToast(message, errorCount > 0 ? 'warning' : 'success');
+        }
+    }
+}
+
 // Removed loadPrestashopCategories() and displayPrestashopCategories() functions
 // Categories are automatically managed by the backend during export
 // The backend checks for existing categories and creates them if needed
@@ -3089,8 +3631,6 @@ async function exportToPrestashop() {
         showToast('Please configure PrestaShop first', 'error');
         return;
     }
-    
-    const autoCreateCategories = document.getElementById('autoCreateCategories')?.checked || false;
     
     // Confirm before export
     if (!confirm(`Export ${importedOffers.length} product(s) to PrestaShop?`)) {
@@ -3122,21 +3662,58 @@ async function exportToPrestashop() {
     let errorCount = 0;
     const errors = [];
     
+    // Before exporting, ensure we have full product details for all offers
+    // This ensures descriptions and images are available
+    showToast('Fetching full product details before export...', 'info');
+    for (let i = 0; i < importedOffers.length; i++) {
+        const offer = importedOffers[i];
+        // Check if offer has full description structure or needs fetching
+        const hasFullDescription = offer.description?.sections || 
+                                   (offer.description && typeof offer.description === 'string' && offer.description.length > 0) ||
+                                   offer.product?.description;
+        const hasImages = (offer.images && Array.isArray(offer.images) && offer.images.length > 0) ||
+                          offer.primaryImage?.url;
+        
+        // If missing description or images, fetch full details
+        if (!hasFullDescription || !hasImages) {
+            try {
+                await fetchProductDetails(offer.id);
+                // Update offer reference after fetchProductDetails updates importedOffers
+                const updatedOffer = importedOffers.find(imp => imp.id === offer.id || imp.id?.toString() === offer.id?.toString());
+                if (updatedOffer) {
+                    importedOffers[i] = updatedOffer;
+                }
+            } catch (error) {
+                console.warn(`Failed to fetch full details for offer ${offer.id}, proceeding with available data:`, error);
+            }
+        }
+    }
+    
     // Export products one by one
     for (let i = 0; i < importedOffers.length; i++) {
         const offer = importedOffers[i];
         
         try {
-            // Find category mapping
+            // Fetch category path for matching in PrestaShop
+            let categoryPath = null;
             let categoryId = null;
+            
             if (offer.category) {
                 const allegroCategoryId = typeof offer.category === 'string' 
                     ? offer.category 
                     : offer.category.id;
                 
-                // Try to find matching PrestaShop category
-                // For now, we'll use auto-create or default
-                categoryId = null; // Will be handled by backend if auto-create is enabled
+                // Fetch the full category path from root to leaf
+                try {
+                    categoryPath = await fetchCategoryPath(allegroCategoryId);
+                    if (categoryPath && categoryPath.length > 0) {
+                        // Add the path to the offer object for the backend
+                        offer.categoryPath = categoryPath;
+                    }
+                } catch (error) {
+                    console.warn(`Failed to fetch category path for offer ${offer.id}:`, error);
+                    // Continue without category path - backend will use default
+                }
             }
             
             const response = await fetch(`${API_BASE}/api/prestashop/products`, {
@@ -3145,7 +3722,6 @@ async function exportToPrestashop() {
                 body: JSON.stringify({
                     offer: offer,
                     categoryId: categoryId,
-                    autoCreateCategory: autoCreateCategories,
                     categories: allCategories // Send categories list so backend can use existing category info
                 })
             });
@@ -3370,55 +3946,7 @@ function loadImportedOffers() {
 
 // Removed Created Products feature - no longer needed
 
-// Save offers and categories to localStorage for persistence across refresh
-function saveOffersAndCategories() {
-    try {
-        localStorage.setItem('allegro_allOffers', JSON.stringify(allLoadedOffers));
-        localStorage.setItem('allegro_allCategories', JSON.stringify(allCategories));
-        localStorage.setItem('allegro_categoriesWithProducts', JSON.stringify(categoriesWithProducts));
-    } catch (e) {
-        console.error('Error saving offers/categories to localStorage:', e);
-    }
-}
-
-// Load offers and categories from localStorage on startup
-function loadOffersAndCategoriesFromStorage() {
-    try {
-        const savedOffers = localStorage.getItem('allegro_allOffers');
-        const savedCategories = localStorage.getItem('allegro_allCategories');
-        const savedCategoriesWithProducts = localStorage.getItem('allegro_categoriesWithProducts');
-
-        if (savedOffers) {
-            allLoadedOffers = JSON.parse(savedOffers) || [];
-            currentOffers = allLoadedOffers.slice();
-            totalCount = currentOffers.length;
-            currentOffset = 0;
-            currentPageNumber = 1;
-            pageHistory = [];
-            totalProductsSeen = 0;
-            if (currentOffers.length > 0) {
-                displayOffersPage();
-            }
-        }
-
-        if (savedCategories) {
-            allCategories = JSON.parse(savedCategories) || [];
-        }
-        if (savedCategoriesWithProducts) {
-            categoriesWithProducts = JSON.parse(savedCategoriesWithProducts) || [];
-        }
-
-        // Update category select dropdown if we have saved categories
-        if (allCategories.length > 0) {
-            updateCategorySelect();
-        }
-
-        // Ensure CSV export buttons reflect loaded data
-        updateCsvExportButtonsState();
-    } catch (e) {
-        console.error('Error loading offers/categories from localStorage:', e);
-    }
-}
+// Removed localStorage caching - data is always loaded fresh from Allegro API
 
 // Clear selection - unselect all products (checkboxes)
 function clearSearch() {
@@ -3432,6 +3960,186 @@ function clearSearch() {
 }
 
 // Load categories from user's offers (only categories that have products)
+// Cache for category data to avoid redundant API calls
+let categoryDataCache = {};
+
+// Fetch category data with parent information
+async function fetchCategoryData(categoryId) {
+    if (categoryDataCache[categoryId]) {
+        return categoryDataCache[categoryId];
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/categories/${categoryId}`);
+        if (!response.ok) {
+            return null;
+        }
+        
+        const result = await response.json();
+        if (result.success && result.data) {
+            categoryDataCache[categoryId] = result.data;
+            return result.data;
+        }
+    } catch (error) {
+        console.log(`Error fetching category data for ${categoryId}:`, error);
+    }
+    
+    return null;
+}
+
+// Fetch parent category path for a given category ID
+async function fetchCategoryPath(categoryId) {
+    const path = [];
+    const visited = new Set(); // Prevent infinite loops
+    
+    let currentCategoryId = String(categoryId);
+    
+    while (currentCategoryId && !visited.has(currentCategoryId)) {
+        visited.add(currentCategoryId);
+        
+        const category = await fetchCategoryData(currentCategoryId);
+        if (!category) {
+            break;
+        }
+        
+        path.unshift({
+            id: currentCategoryId,
+            name: category.name || `Category ${currentCategoryId}`
+        });
+        
+        // Check for parent category
+        if (category.parent && category.parent.id) {
+            currentCategoryId = String(category.parent.id);
+        } else {
+            break;
+        }
+    }
+    
+    return path.length > 0 ? path : null;
+}
+
+// Build category tree structure with only categories that have products
+async function buildCategoryTreeWithProducts(categoriesWithCounts) {
+    categoryTreeWithProducts = {};
+    categoryProductCounts = {};
+    categoryDataCache = {}; // Clear cache for fresh build
+    categoryTreeCache = {}; // Clear category tree cache to force refresh with counts
+    
+    // First, store all categories with their product counts
+    const categoryMap = new Map();
+    categoriesWithCounts.forEach(cat => {
+        const catId = String(cat.id);
+        categoryProductCounts[catId] = cat.count;
+        categoryMap.set(catId, {
+            id: catId,
+            name: cat.name,
+            count: cat.count
+        });
+    });
+    
+    // Fetch parent paths for all categories and build tree
+    // Process in batches to avoid overwhelming the API
+    const batchSize = 10;
+    const categoryIds = Array.from(categoryMap.keys());
+    
+    for (let i = 0; i < categoryIds.length; i += batchSize) {
+        const batch = categoryIds.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (catId) => {
+            const category = categoryMap.get(catId);
+            const path = await fetchCategoryPath(catId);
+            
+            if (path && path.length > 0) {
+                // Build tree structure from path
+                let currentLevel = categoryTreeWithProducts;
+                
+                for (let j = 0; j < path.length; j++) {
+                    const pathNode = path[j];
+                    const pathNodeId = String(pathNode.id);
+                    
+                    // Initialize node if it doesn't exist
+                    if (!currentLevel[pathNodeId]) {
+                        currentLevel[pathNodeId] = {
+                            id: pathNodeId,
+                            name: pathNode.name,
+                            count: 0,
+                            children: {},
+                            parent: j > 0 ? path[j - 1].id : null
+                        };
+                    }
+                    
+                    // If this is the leaf category (has products), add its count
+                    if (j === path.length - 1) {
+                        currentLevel[pathNodeId].count += category.count;
+                    }
+                    
+                    // Ensure children object exists
+                    if (!currentLevel[pathNodeId].children) {
+                        currentLevel[pathNodeId].children = {};
+                    }
+                    
+                    // Move to next level
+                    currentLevel = currentLevel[pathNodeId].children;
+                }
+            }
+        }));
+    }
+    
+    // Calculate counts for parent categories (sum of all children)
+    function calculateParentCounts(node) {
+        let totalCount = node.count || 0;
+        
+        for (const childId in node.children) {
+            const childCount = calculateParentCounts(node.children[childId]);
+            totalCount += childCount;
+        }
+        
+        node.count = totalCount;
+        return totalCount;
+    }
+    
+    // Calculate counts for all root nodes
+    for (const rootId in categoryTreeWithProducts) {
+        calculateParentCounts(categoryTreeWithProducts[rootId]);
+    }
+}
+
+// Get children of a category from the tree structure
+function getCategoryChildren(parentId, tree = categoryTreeWithProducts) {
+    if (!parentId) {
+        // Return root level categories
+        return Object.values(tree).map(node => ({
+            id: node.id,
+            name: node.name,
+            count: node.count,
+            leaf: Object.keys(node.children).length === 0
+        }));
+    }
+    
+    // Find the category in the tree
+    function findCategory(id, currentTree) {
+        for (const nodeId in currentTree) {
+            if (nodeId === id) {
+                return currentTree[nodeId];
+            }
+            const found = findCategory(id, currentTree[nodeId].children);
+            if (found) return found;
+        }
+        return null;
+    }
+    
+    const category = findCategory(String(parentId), tree);
+    if (category && category.children) {
+        return Object.values(category.children).map(node => ({
+            id: node.id,
+            name: node.name,
+            count: node.count,
+            leaf: Object.keys(node.children).length === 0
+        }));
+    }
+    
+    return [];
+}
+
 async function loadCategoriesFromOffers() {
     if (!validateAuth() || !isOAuthConnected) {
         return;
@@ -3444,100 +4152,147 @@ async function loadCategoriesFromOffers() {
     categoriesListEl.innerHTML = '<div style="text-align: center; padding: 20px; color: #1a73e8; font-size: 0.9em;">Loading categories from your offers...</div>';
     
     try {
-        // Fetch a limited set of user's offers to extract categories
-        // Smaller limit keeps loading time short while still covering most used categories
-        const response = await fetch(`${API_BASE}/api/offers?offset=0&limit=300`);
+        // Fetch ALL offers to get complete category data
+        let allOffers = [];
+        let offset = 0;
+        const limit = 1000; // Maximum allowed by API
+        let hasMore = true;
         
-        if (!response.ok && response.status === 401) {
-            throw new Error('Invalid credentials. Please check your Client ID and Client Secret.');
+        while (hasMore) {
+            const response = await fetch(`${API_BASE}/api/offers?offset=${offset}&limit=${limit}`);
+            
+            if (!response.ok && response.status === 401) {
+                throw new Error('Invalid credentials. Please check your Client ID and Client Secret.');
+            }
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                const offers = result.data.offers || [];
+                allOffers = allOffers.concat(offers);
+                
+                // Check if there are more offers to fetch
+                const totalCount = result.data.totalCount || 0;
+                if (offers.length < limit || (totalCount > 0 && allOffers.length >= totalCount)) {
+                    hasMore = false;
+                } else {
+                    offset += limit;
+                }
+            } else {
+                hasMore = false;
+            }
         }
         
-        const result = await response.json();
+        console.log(`Loaded ${allOffers.length} total offers from Allegro for category extraction`);
         
-        if (result.success) {
-            const offers = result.data.offers || [];
+        // Extract unique categories from offers with counts
+        const categoriesFromOffers = new Map();
+        
+        allOffers.forEach(offer => {
+            let offerCategoryId = null;
+            let offerCategoryName = null;
             
-            // Extract unique categories from offers
-            const categoriesFromOffers = new Map();
-            
-            offers.forEach(offer => {
-                let offerCategoryId = null;
-                let offerCategoryName = null;
-                
-                // Try multiple ways to extract category
-                if (offer.category) {
-                    if (typeof offer.category === 'string') {
-                        offerCategoryId = offer.category;
-                    } else if (offer.category.id) {
-                        offerCategoryId = offer.category.id;
-                        offerCategoryName = offer.category.name || null;
-                    }
+            // Try multiple ways to extract category
+            if (offer.category) {
+                if (typeof offer.category === 'string') {
+                    offerCategoryId = offer.category;
+                } else if (offer.category.id) {
+                    offerCategoryId = offer.category.id;
+                    offerCategoryName = offer.category.name || null;
                 }
-                
-                // Also check product.category
-                if (!offerCategoryId && offer.product?.category) {
-                    if (typeof offer.product.category === 'string') {
-                        offerCategoryId = offer.product.category;
-                    } else if (offer.product.category.id) {
-                        offerCategoryId = offer.product.category.id;
-                        offerCategoryName = offer.product.category.name || null;
-                    }
-                }
-                
-                if (offerCategoryId) {
-                    const catId = String(offerCategoryId);
-                    if (!categoriesFromOffers.has(catId)) {
-                        categoriesFromOffers.set(catId, {
-                            id: catId,
-                            name: offerCategoryName || categoryNameCache[catId] || `Category ${catId}`,
-                            count: 0
-                        });
-                    }
-                    categoriesFromOffers.get(catId).count++;
-                }
-            });
-            
-            // Convert map to array and fetch category names if needed
-            const categoriesArray = Array.from(categoriesFromOffers.values());
-            
-            // Fetch category names for categories without names, in parallel for speed
-            await Promise.all(categoriesArray.map(async (cat) => {
-                if (cat.name === `Category ${cat.id}` || !cat.name) {
-                    try {
-                        const catName = await fetchCategoryName(cat.id);
-                        if (catName && catName !== 'N/A') {
-                            cat.name = catName;
-                            categoryNameCache[cat.id] = catName;
-                        }
-                    } catch (error) {
-                        console.log(`Failed to fetch category name for ${cat.id}:`, error);
-                    }
-                }
-            }));
-            
-            // Store categories for use with PrestaShop export/mapping and dropdowns.
-            // The sidebar tree itself is now loaded directly from Allegro's category
-            // hierarchy (see loadCategoryTreeRoot / loadCategoryTreeLevel).
-            allCategories = categoriesArray;
-            categoriesWithProducts = categoriesArray;
-            
-            // Update category select dropdown in the Offers section
-            updateCategorySelect();
-            
-            // Update dashboard stats
-            updateDashboardStats();
-            
-            if (categoriesArray.length === 0) {
-                categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #666;">No categories found in your offers. Load offers to see categories.</p>';
             }
-
-            // Persist latest categories along with any loaded offers
-            saveOffersAndCategories();
-
-            // Categories changed, refresh CSV export buttons state
-            updateCsvExportButtonsState();
+            
+            // Also check product.category
+            if (!offerCategoryId && offer.product?.category) {
+                if (typeof offer.product.category === 'string') {
+                    offerCategoryId = offer.product.category;
+                } else if (offer.product.category.id) {
+                    offerCategoryId = offer.product.category.id;
+                    offerCategoryName = offer.product.category.name || null;
+                }
+            }
+            
+            if (offerCategoryId) {
+                const catId = String(offerCategoryId);
+                if (!categoriesFromOffers.has(catId)) {
+                    categoriesFromOffers.set(catId, {
+                        id: catId,
+                        name: offerCategoryName || categoryNameCache[catId] || `Category ${catId}`,
+                        count: 0
+                    });
+                }
+                categoriesFromOffers.get(catId).count++;
+            }
+        });
+        
+        // Convert map to array and fetch category names if needed
+        const categoriesArray = Array.from(categoriesFromOffers.values());
+        
+        console.log(`Found ${categoriesArray.length} unique categories from ${allOffers.length} offers`);
+        if (categoriesArray.length > 0) {
+            const totalProductsInCategories = categoriesArray.reduce((sum, cat) => sum + (cat.count || 0), 0);
+            console.log(`Total products in categories: ${totalProductsInCategories}`);
+            console.log('Top categories by count:', categoriesArray
+                .sort((a, b) => (b.count || 0) - (a.count || 0))
+                .slice(0, 10)
+                .map(c => `${c.name || c.id}: ${c.count}`)
+                .join(', '));
+        }
+        
+        // Note: Categories are only shown if they have at least one product in loaded offers
+        // If a category doesn't appear, it means no offers in that category were loaded
+        // Category counts reflect the number of offers loaded, which may differ from Allegro website
+        
+        // Fetch category names for categories without names, in parallel for speed
+        await Promise.all(categoriesArray.map(async (cat) => {
+            if (cat.name === `Category ${cat.id}` || !cat.name) {
+                try {
+                    const catName = await fetchCategoryName(cat.id);
+                    if (catName && catName !== 'N/A') {
+                        cat.name = catName;
+                        categoryNameCache[cat.id] = catName;
+                    }
+                } catch (error) {
+                    console.log(`Failed to fetch category name for ${cat.id}:`, error);
+                }
+            }
+        }));
+        
+        // Build category tree with only categories that have products
+        await buildCategoryTreeWithProducts(categoriesArray);
+        
+        // Store categories for use with PrestaShop export/mapping and dropdowns
+        allCategories = categoriesArray;
+        categoriesWithProducts = categoriesArray;
+        
+        // Update category select dropdown in the Offers section
+        updateCategorySelect();
+        
+        // Update dashboard stats
+        updateDashboardStats();
+        
+        if (categoriesArray.length === 0) {
+            categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #666;">No categories found in your offers. Load offers to see categories.</p>';
         } else {
-            throw new Error(result.error?.message || 'Failed to fetch offers');
+            // Display the category tree in the sidebar
+            await loadCategoryTreeRoot(false);
+            
+            // Show info message about category counts
+            console.log(`✓ Categories loaded: ${categoriesArray.length} categories from ${allOffers.length} offers`);
+            console.log('Note: Category counts reflect offers loaded from Allegro API. Some categories may not appear if they have no offers, or counts may differ from Allegro website if offers are filtered by status.');
+        }
+
+        // Data is always loaded fresh from Allegro API, no localStorage caching
+
+        // Categories changed, refresh CSV export buttons state
+        updateCsvExportButtonsState();
+
+        // Sync categories to PrestaShop after loading (only creates if they don't exist)
+        if (categoriesArray.length > 0) {
+            // Run in background without blocking UI
+            syncCategoriesToPrestashop().catch(error => {
+                console.error('Error syncing categories to PrestaShop:', error);
+            });
         }
     } catch (error) {
         console.error('Error loading categories from offers:', error);
@@ -3561,6 +4316,14 @@ async function loadCategoryTreeRoot(forceReload = false) {
     }
 
     const rootKey = 'root';
+    
+    // If we have a tree with products (which includes counts), use it instead of cache
+    if (Object.keys(categoryTreeWithProducts).length > 0) {
+        await loadCategoryTreeLevel(null, [], forceReload);
+        return;
+    }
+    
+    // Otherwise, use cache if available and not forcing reload
     if (!forceReload && categoryTreeInitialized && categoryTreeCache[rootKey]) {
         await displayCategories(categoryTreeCache[rootKey], []);
         return;
@@ -3581,6 +4344,24 @@ async function loadCategoryTreeLevel(parentId = null, path = [], forceReload = f
     const key = parentId || 'root';
     categoryTreePath = path || [];
 
+    // If we have a built tree with products, use it instead of fetching from API
+    if (Object.keys(categoryTreeWithProducts).length > 0) {
+        const categories = getCategoryChildren(parentId, categoryTreeWithProducts);
+        
+        // Sort categories by name
+        categories.sort((a, b) => {
+            const nameA = (a.name || '').toLowerCase();
+            const nameB = (b.name || '').toLowerCase();
+            return nameA.localeCompare(nameB);
+        });
+        
+        categoryTreeCache[key] = categories;
+        categoryTreeInitialized = true;
+        await displayCategories(categories, categoryTreePath);
+        return;
+    }
+
+    // Fallback to API if tree not built yet
     if (!forceReload && categoryTreeCache[key]) {
         await displayCategories(categoryTreeCache[key], categoryTreePath);
         categoryTreeInitialized = true;
@@ -3647,22 +4428,10 @@ async function fetchCategoryName(categoryId) {
 // Display categories
 async function displayCategories(categories, pathOverride) {
     const categoriesListEl = document.getElementById('categoriesList');
-    const categorySearchInputEl = document.getElementById('categorySearchInput');
     if (!categoriesListEl) return;
 
     const path = Array.isArray(pathOverride) ? pathOverride : (categoryTreePath || []);
     let categoriesToDisplay = Array.isArray(categories) ? [...categories] : [];
-
-    // Apply simple client-side search within the current level
-    let searchText = '';
-    if (categorySearchInputEl) {
-        searchText = categorySearchInputEl.value.trim().toLowerCase();
-    }
-    if (searchText) {
-        categoriesToDisplay = categoriesToDisplay.filter(cat =>
-            (cat.name || '').toLowerCase().includes(searchText)
-        );
-    }
 
     const htmlParts = [];
 
@@ -3703,12 +4472,13 @@ async function displayCategories(categories, pathOverride) {
                     String(selectedCategoryId) === String(category.id);
                 const safeName = escapeHtml(category.name || 'Unnamed Category');
                 const isLeaf = !!category.leaf;
+                const count = category.count || 0;
                 return `
                     <div class="category-item ${isSelected ? 'selected' : ''}"
                          data-category-id="${category.id}"
                          data-category-name="${safeName}"
                          data-leaf="${isLeaf ? 'true' : 'false'}">
-                        <span class="category-item-name">${safeName}</span>
+                        <span class="category-item-name">${safeName}${count > 0 ? ` <span style="color: #666; font-weight: normal;">(${count})</span>` : ''}</span>
                         ${isLeaf ? '' : '<span class="category-chevron">›</span>'}
                     </div>
                 `;
@@ -3757,14 +4527,6 @@ async function displayCategories(categories, pathOverride) {
             }
         });
     });
-
-    // Wire up search box once (re-renders current level with new filter text)
-    if (categorySearchInputEl && !categorySearchInputEl.dataset.bound) {
-        categorySearchInputEl.dataset.bound = 'true';
-        categorySearchInputEl.addEventListener('input', () => {
-            displayCategories(categories, path);
-        });
-    }
 }
 
 // Select a category

@@ -534,6 +534,76 @@ function prestashopSlug(value) {
 }
 
 /**
+ * Extract description from Allegro offer/product structure
+ * Handles both simple string descriptions and structured format (description.sections[].items[])
+ * Returns HTML-formatted description and array of image URLs found in description
+ */
+function extractDescription(offer) {
+  let descriptionHtml = '';
+  const descriptionImages = [];
+  
+  // Helper function to process structured description sections
+  const processSections = (descriptionObj) => {
+    if (descriptionObj && descriptionObj.sections && Array.isArray(descriptionObj.sections)) {
+      descriptionObj.sections.forEach(section => {
+        if (section.items && Array.isArray(section.items)) {
+          section.items.forEach(item => {
+            if (item.type === 'TEXT' && item.content) {
+              // TEXT items contain HTML content
+              descriptionHtml += item.content;
+            } else if (item.type === 'IMAGE' && item.url) {
+              // IMAGE items in description - include in HTML and collect URL
+              descriptionHtml += `<img src="${item.url}" alt="Product image" style="max-width: 100%; height: auto; margin: 10px 0;">`;
+              if (!descriptionImages.includes(item.url)) {
+                descriptionImages.push(item.url);
+              }
+            }
+          });
+        }
+      });
+      return true; // Found structured format
+    }
+    return false; // No structured format found
+  };
+  
+  // Check for structured format in various locations
+  // 1. offer.description.sections[]
+  if (offer.description && processSections(offer.description)) {
+    // Successfully processed structured description
+  }
+  // 2. offer.product.description.sections[]
+  else if (offer.product?.description && processSections(offer.product.description)) {
+    // Successfully processed structured description from product object
+  }
+  // 3. Fallback to simple string description if structured format not found
+  else {
+    // Check various possible description fields
+    if (offer.description && typeof offer.description === 'string') {
+      descriptionHtml = offer.description;
+    } else if (offer.descriptionHtml) {
+      descriptionHtml = offer.descriptionHtml;
+    } else if (offer.product?.description && typeof offer.product.description === 'string') {
+      descriptionHtml = offer.product.description;
+    } else if (offer.product?.descriptionHtml) {
+      descriptionHtml = offer.product.descriptionHtml;
+    } else if (offer.details?.description) {
+      descriptionHtml = offer.details.description;
+    } else if (offer.publication?.description) {
+      descriptionHtml = offer.publication.description;
+    } else if (offer.name) {
+      descriptionHtml = offer.name;
+    } else {
+      descriptionHtml = '';
+    }
+  }
+  
+  return {
+    html: descriptionHtml,
+    images: descriptionImages
+  };
+}
+
+/**
  * Extract short description from full description
  * Strips HTML tags and gets first meaningful text (up to 800 chars)
  */
@@ -1026,8 +1096,12 @@ async function prestashopApiRequest(endpoint, method = 'GET', data = null) {
 /**
  * Make authenticated request to Allegro API
  * Uses user OAuth token if available, otherwise falls back to client credentials
+ * @param {string} endpoint - API endpoint path
+ * @param {object} params - Query parameters
+ * @param {boolean} useUserToken - Whether to use user OAuth token
+ * @param {object} customHeaders - Custom headers to include in the request
  */
-async function allegroApiRequest(endpoint, params = {}, useUserToken = false) {
+async function allegroApiRequest(endpoint, params = {}, useUserToken = false, customHeaders = {}) {
   try {
     let token;
     
@@ -1050,11 +1124,15 @@ async function allegroApiRequest(endpoint, params = {}, useUserToken = false) {
       url.searchParams.append(key, params[key]);
     });
     
+    // Merge default headers with custom headers
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.allegro.public.v1+json',
+      ...customHeaders
+    };
+    
     const response = await axios.get(`${ALLEGRO_API_URL}${endpoint}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/vnd.allegro.public.v1+json'
-      },
+      headers: headers,
       params: params
     });
 
@@ -1542,19 +1620,16 @@ app.get('/api/offers', async (req, res) => {
 // resources described in Allegro's documentation.
 
 /**
- * Get product details by ID (including images)
+ * Get offer details by offer ID (including description)
+ * Uses user OAuth token to access own offers
  */
-app.get('/api/products/:productId', async (req, res) => {
+app.get('/api/offers/:offerId', async (req, res) => {
   try {
-    const { productId } = req.params;
-    const { language = 'pl-PL' } = req.query;
+    const { offerId } = req.params;
     
-    const params = {};
-    if (language) {
-      params.language = language;
-    }
-    
-    const data = await allegroApiRequest(`/sale/products/${productId}`, params);
+    // Try to fetch offer details using user OAuth token
+    // This should work for your own offers
+    const data = await allegroApiRequest(`/sale/offers/${offerId}`, {}, true); // Use user token
     
     res.json({
       success: true,
@@ -1565,8 +1640,10 @@ app.get('/api/products/:productId', async (req, res) => {
     let errorMessage = error.message;
     if (error.response?.status === 401) {
       errorMessage = 'Invalid credentials. Please check your Client ID and Client Secret.';
+    } else if (error.response?.status === 403) {
+      errorMessage = 'Access denied. You can only access your own offers.';
     } else if (error.response?.status === 404) {
-      errorMessage = 'Product not found.';
+      errorMessage = 'Offer not found.';
     } else if (error.response?.status) {
       errorMessage = error.response?.data?.message || error.response?.data?.error || errorMessage;
     }
@@ -1574,6 +1651,169 @@ app.get('/api/products/:productId', async (req, res) => {
     res.status(error.response?.status || 500).json({
       success: false,
       error: errorMessage
+    });
+  }
+});
+
+/**
+ * Get product details by ID (including images, description, and all detail info)
+ * 
+ * This endpoint accepts both product IDs (UUID) and offer IDs (numeric).
+ * - For offer IDs: Uses ONLY /sale/product-offers/{offerId} which provides:
+ *   - Multi-image support
+ *   - Description
+ *   - All product detail information
+ * - For product IDs: Uses /sale/products/{productId}
+ * 
+ * Supports query parameters and headers:
+ * - category.id: The similar category identifier to filter parameters
+ * - language: BCP-47 language code (en-US, pl-PL, uk-UA, sk-SK, cs-CZ, hu-HU)
+ * - Accept-Language: Header for expected language of messages
+ * 
+ * API endpoints:
+ * - GET /sale/product-offers/{offerId} - Get product data from offer ID (includes images, description, details)
+ * - GET /sale/products/{productId} - Get product details by product ID (UUID)
+ */
+app.get('/api/products/:productId', async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const { language, 'category.id': categoryId } = req.query;
+    const acceptLanguage = req.headers['accept-language'];
+    
+    // Check if productId is actually an offer ID (numeric) instead of a product ID (UUID)
+    // Product IDs are UUIDs (e.g., "c9e39cae-9cb6-11e9-a2a3-2a2ae2dbcce4")
+    // Offer IDs are numeric strings (e.g., "18115748148")
+    const isNumericId = /^\d+$/.test(productId);
+    
+    if (isNumericId) {
+      // This is an offer ID - use ONLY /sale/product-offers/{offerId}
+      // This endpoint provides multi-image, description, and all detail info
+      console.log(`Detected offer ID ${productId}, fetching product data via /sale/product-offers/${productId}...`);
+      
+      // Build query parameters for product-offers endpoint
+      const params = {};
+      if (language) {
+        // Validate language code (BCP-47 format)
+        const validLanguages = ['en-US', 'pl-PL', 'uk-UA', 'sk-SK', 'cs-CZ', 'hu-HU'];
+        if (validLanguages.includes(language)) {
+          params.language = language;
+        } else {
+          return res.status(422).json({
+            success: false,
+            error: `Invalid language code. Must be one of: ${validLanguages.join(', ')}`
+          });
+        }
+      }
+      
+      if (categoryId) {
+        params['category.id'] = categoryId;
+      }
+      
+      // Build custom headers
+      const customHeaders = {};
+      if (acceptLanguage) {
+        // Validate Accept-Language header (BCP-47 format)
+        const validLanguages = ['en-US', 'pl-PL', 'uk-UA', 'sk-SK', 'cs-CZ', 'hu-HU'];
+        if (validLanguages.includes(acceptLanguage)) {
+          customHeaders['Accept-Language'] = acceptLanguage;
+        }
+      }
+      
+      // Fetch product data directly from /sale/product-offers/{offerId}
+      // This endpoint provides all needed information: images, description, details
+      // Note: This endpoint only works for offers that belong to the authenticated user
+      try {
+        const data = await allegroApiRequest(`/sale/product-offers/${productId}`, params, true, customHeaders);
+        
+        return res.json({
+          success: true,
+          data: data
+        });
+      } catch (productOfferError) {
+        // Handle access denied errors specifically
+        if (productOfferError.response?.status === 403) {
+          return res.status(403).json({
+            success: false,
+            error: 'Access denied. You can only access your own offers.',
+            message: `The offer ${productId} does not belong to your account or you do not have permission to access it.`
+          });
+        }
+        // Re-throw other errors to be handled by the outer catch block
+        throw productOfferError;
+      }
+    }
+    
+    // This is a product ID (UUID) - use /sale/products/{productId}
+    console.log(`Detected product ID (UUID) ${productId}, fetching product data via /sale/products/${productId}...`);
+    
+    // Build query parameters
+    const params = {};
+    if (language) {
+      // Validate language code (BCP-47 format)
+      const validLanguages = ['en-US', 'pl-PL', 'uk-UA', 'sk-SK', 'cs-CZ', 'hu-HU'];
+      if (validLanguages.includes(language)) {
+        params.language = language;
+      } else {
+        return res.status(422).json({
+          success: false,
+          error: `Invalid language code. Must be one of: ${validLanguages.join(', ')}`
+        });
+      }
+    }
+    
+    if (categoryId) {
+      params['category.id'] = categoryId;
+    }
+    
+    // Build custom headers
+    const customHeaders = {};
+    if (acceptLanguage) {
+      // Validate Accept-Language header (BCP-47 format)
+      const validLanguages = ['en-US', 'pl-PL', 'uk-UA', 'sk-SK', 'cs-CZ', 'hu-HU'];
+      if (validLanguages.includes(acceptLanguage)) {
+        customHeaders['Accept-Language'] = acceptLanguage;
+      }
+    }
+    
+    // Make API request with user token (required for product details)
+    const data = await allegroApiRequest(`/sale/products/${productId}`, params, true, customHeaders);
+    
+    res.json({
+      success: true,
+      data: data
+    });
+  } catch (error) {
+    // Convert technical error messages to user-friendly ones
+    let errorMessage = error.message;
+    let statusCode = error.response?.status || 500;
+    
+    if (error.response?.status === 401) {
+      errorMessage = 'Unauthorized. User OAuth authentication is required to access product details.';
+      statusCode = 401;
+    } else if (error.response?.status === 403) {
+      // Access denied - offer doesn't belong to user
+      errorMessage = 'Access denied. You can only access your own offers.';
+      statusCode = 403;
+    } else if (error.response?.status === 404) {
+      errorMessage = 'Product/offer not found or language version is currently unavailable.';
+      statusCode = 404;
+    } else if (error.response?.status === 422) {
+      // Handle validation errors
+      const errors = error.response?.data?.errors || [];
+      if (errors.length > 0) {
+        errorMessage = errors.map(e => e.message || e.userMessage || e.details).join('; ') || 'Invalid parameter value.';
+      } else {
+        errorMessage = error.response?.data?.message || 'One of the parameters has an invalid value.';
+      }
+      statusCode = 422;
+    } else if (error.response?.status) {
+      errorMessage = error.response?.data?.message || error.response?.data?.error || errorMessage;
+    }
+    
+    res.status(statusCode).json({
+      success: false,
+      error: errorMessage,
+      ...(error.response?.data?.errors && { errors: error.response.data.errors })
     });
   }
 });
@@ -1851,9 +2091,196 @@ app.get('/api/prestashop/test', async (req, res) => {
 });
 
 /**
- * Find existing category by name in PrestaShop
+ * Find existing category by name AND parent ID in PrestaShop
  * Returns category ID if found, null otherwise
  * Always checks PrestaShop directly to avoid stale cache issues
+ */
+async function findCategoryByNameAndParent(categoryName, idParent = null) {
+  try {
+    // Normalize category name (remove accents, collapse spaces, lowercase)
+    const normalizedName = categoryName
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    
+    console.log(`Checking PrestaShop for category "${categoryName}" (normalized: "${normalizedName}") with parent ID: ${idParent}...`);
+    
+    // Fetch all categories (with pagination support)
+    let allCategories = [];
+    let limit = 1000;
+    let offset = 0;
+    let hasMore = true;
+    let paginationSupported = true;
+    
+    // Fetch categories in batches to handle pagination
+    while (hasMore) {
+      try {
+        // Request id, name, and id_parent to check both name and parent
+        const data = await prestashopApiRequest(
+          `categories?display=[id,name,id_parent]&limit=${limit}${offset > 0 ? `&offset=${offset}` : ''}`,
+          'GET'
+        );
+        
+        // PrestaShop returns categories in format: { categories: [{ category: {...} }] } or { category: {...} }
+        let categories = [];
+        if (data.categories) {
+          if (Array.isArray(data.categories)) {
+            categories = data.categories.map(item => item.category || item);
+          } else if (data.categories.category) {
+            categories = Array.isArray(data.categories.category) 
+              ? data.categories.category 
+              : [data.categories.category];
+          }
+        } else if (data.category) {
+          categories = Array.isArray(data.category) ? data.category : [data.category];
+        }
+        
+        if (categories.length === 0) {
+          hasMore = false;
+        } else {
+          allCategories = allCategories.concat(categories);
+          // If we got fewer categories than the limit, we've reached the end
+          if (categories.length < limit) {
+            hasMore = false;
+          } else if (paginationSupported) {
+            offset += limit;
+          } else {
+            // Pagination not supported, stop after first batch
+            hasMore = false;
+          }
+        }
+      } catch (paginationError) {
+        // If pagination fails (404), PrestaShop may not support offset parameter
+        // Just use the categories we've fetched so far
+        if (paginationError.response?.status === 404 && offset > 0) {
+          paginationSupported = false;
+          hasMore = false;
+          // Don't log this as an error - it's expected for some PrestaShop versions
+        } else {
+          // Re-throw if it's a different error or first page fails
+          throw paginationError;
+        }
+      }
+    }
+    
+    // Search for category with matching name AND parent
+    // PrestaShop category names are stored as arrays: [{ id: 1, value: "Name PL" }, { id: 2, value: "Name EN" }]
+    for (const category of allCategories) {
+      // Check parent ID first (faster check)
+      const categoryParentId = category.id_parent || category.parent?.id || null;
+      const parentMatches = idParent === null || String(categoryParentId) === String(idParent);
+      
+      if (!parentMatches) {
+        continue; // Skip if parent doesn't match
+      }
+      
+      if (category.name) {
+        // Handle both array format and object format
+        let nameArray = [];
+        if (Array.isArray(category.name)) {
+          nameArray = category.name;
+        } else if (category.name.language && Array.isArray(category.name.language)) {
+          nameArray = category.name.language;
+        } else if (category.name.language) {
+          nameArray = [category.name.language];
+        } else if (typeof category.name === 'object' && category.name.value) {
+          nameArray = [category.name];
+        } else if (typeof category.name === 'string') {
+          // Direct string name
+          const candidateName = category.name
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (candidateName === normalizedName) {
+            const categoryId = category.id || category.category?.id;
+            if (categoryId) {
+              return categoryId;
+            }
+          }
+        }
+        
+        // Check if any language version matches the category name
+        for (const nameEntry of nameArray) {
+          if (!nameEntry) continue;
+          const rawValue = nameEntry.value || (typeof nameEntry === 'string' ? nameEntry : null);
+          if (!rawValue || typeof rawValue !== 'string') continue;
+          const candidateName = rawValue
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (candidateName === normalizedName) {
+            const categoryId = category.id || category.category?.id;
+            if (categoryId) {
+              return categoryId;
+            }
+          }
+        }
+      }
+    }
+    
+    return null; // Category not found
+  } catch (error) {
+    console.error('Error finding category by name and parent:', error.message);
+    return null; // Return null on error to allow creation to proceed
+  }
+}
+
+/**
+ * Find matching category in PrestaShop by traversing category path from root to leaf
+ * Returns the deepest (lowest-layer) matching category ID found, or null if no match
+ * @param {Array} categoryPath - Array of category objects with {id, name} from root to leaf
+ * @returns {Promise<number|null>} - Category ID if found, null otherwise
+ */
+async function findMatchingCategoryByPath(categoryPath) {
+  if (!categoryPath || !Array.isArray(categoryPath) || categoryPath.length === 0) {
+    return null;
+  }
+
+  try {
+    // Start from root (parent ID 2 is Home category in PrestaShop)
+    let currentParentId = 2;
+    let deepestMatchId = null;
+
+    // Traverse the path from root to leaf
+    for (let i = 0; i < categoryPath.length; i++) {
+      const pathNode = categoryPath[i];
+      const categoryName = pathNode.name;
+
+      if (!categoryName) {
+        continue; // Skip if no name
+      }
+
+      // Try to find this category level in PrestaShop under the current parent
+      const foundCategoryId = await findCategoryByNameAndParent(categoryName, currentParentId);
+
+      if (foundCategoryId && !isNaN(foundCategoryId)) {
+        // Found a match at this level, continue to next level
+        deepestMatchId = foundCategoryId;
+        currentParentId = foundCategoryId;
+      } else {
+        // No match at this level, stop and return the deepest match found so far
+        break;
+      }
+    }
+
+    return deepestMatchId; // Returns the deepest matching category ID, or null if no match
+  } catch (error) {
+    console.error('Error finding matching category by path:', error);
+    return null;
+  }
+}
+
+/**
+ * Find existing category by name in PrestaShop (legacy function for backward compatibility)
+ * Returns category ID if found, null otherwise
+ * Always checks PrestaShop directly to avoid stale cache issues
+ * NOTE: This only checks by name, not parent. Use findCategoryByNameAndParent for accurate checking.
  */
 async function findCategoryByName(categoryName) {
   try {
@@ -2095,10 +2522,11 @@ app.post('/api/prestashop/categories', async (req, res) => {
       });
     }
 
-    // Always check existing categories directly in PrestaShop by name
-    let existingCategoryId = await findCategoryByName(name);
+    // Always check existing categories directly in PrestaShop by name AND parent
+    // This prevents duplicates when the same category name exists under different parents
+    let existingCategoryId = await findCategoryByNameAndParent(name, idParent);
 
-    // If we found a matching category name, just return it
+    // If we found a matching category with the same name AND parent, just return it
     if (existingCategoryId && !isNaN(existingCategoryId)) {
       return res.json({
         success: true,
@@ -2143,7 +2571,7 @@ app.post('/api/prestashop/categories', async (req, res) => {
  */
 app.post('/api/prestashop/products', async (req, res) => {
   try {
-    let { offer, categoryId, autoCreateCategory, categories } = req.body;
+    let { offer, categoryId, categories } = req.body;
     
     if (!offer || !offer.id || !offer.name) {
       return res.status(400).json({
@@ -2160,148 +2588,87 @@ app.post('/api/prestashop/products', async (req, res) => {
     // Extract product data from Allegro offer
     const price = offer.sellingMode?.price?.amount || offer.price || 0;
     const stock = offer.stock?.available || 0;
-    const description = offer.description || offer.name || '';
+    
+    // Extract description with support for structured format (description.sections[].items[])
+    const descriptionData = extractDescription(offer);
+    const description = descriptionData.html;
+    const descriptionImages = descriptionData.images;
+    
+    // Log description extraction for debugging
+    console.log(`Description extraction for offer ${offer.id}:`, {
+      hasDescription: !!description,
+      descriptionLength: description?.length || 0,
+      descriptionImagesCount: descriptionImages.length,
+      hasStructuredDescription: !!(offer.description?.sections || offer.product?.description?.sections),
+      descriptionPreview: description ? description.substring(0, 100) + '...' : 'none'
+    });
+    
     // Check for separate short description field (if Allegro provides it)
     const shortDescription = offer.shortDescription || offer.summary || offer.description_short || null;
     
-    // Handle category
+    // Handle category - find matching category in PrestaShop by path
     let finalCategoryId = categoryId || 2; // Default to Home category (id: 2)
     
-    // If category doesn't exist and auto-create is enabled, create it
-    if (!categoryId && autoCreateCategory && offer.category && offer.category.id) {
+    // If categoryId not provided, try to find matching category by path
+    if (!categoryId && offer.category && offer.category.id) {
       try {
-        let allegroCategory = null;
-        let categoryName = null;
+        let categoryPath = null;
         
-        // First, try to use category info already available in the request
-        // 1. Check if category name is directly in offer.category
-        if (offer.category.name) {
-          categoryName = offer.category.name;
-          allegroCategory = offer.category;
-        }
-        // 2. Check if categories list is provided and find the category by ID
-        else if (categories && Array.isArray(categories)) {
-          const categoryIdStr = String(offer.category.id);
-          const foundCategory = categories.find(cat => 
-            String(cat.id) === categoryIdStr || String(cat.category?.id) === categoryIdStr
-          );
-          if (foundCategory) {
-            categoryName = foundCategory.name || foundCategory.category?.name;
-            allegroCategory = foundCategory.category || foundCategory;
-          }
-        }
-        // 3. If category info not found, fetch from Allegro API
-        if (!categoryName || !allegroCategory) {
-          allegroCategory = await allegroApiRequest(`/sale/categories/${offer.category.id}`);
-          categoryName = allegroCategory.name || 'Imported Category';
-        }
-        
-        // Use real category name from available source, fallback to default if not available
-        categoryName = categoryName || allegroCategory?.name || 'Imported Category';
-        const normalizedCategoryName = categoryName
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .toLowerCase()
-          .replace(/\s+/g, ' ')
-          .trim();
-        
-        // Always check existing categories directly in PrestaShop by name
-        let existingCategoryId = await findCategoryByName(categoryName);
-
-        // Double-check: if still not found, do one more lookup right before creating
-        // This prevents race conditions when multiple products are exported simultaneously
-        if (!existingCategoryId || isNaN(existingCategoryId)) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          existingCategoryId = await findCategoryByName(categoryName);
-        }
-        
-        let isNewCategory = false;
-        
-        // Only proceed if we have a valid numeric ID
-        if (existingCategoryId && !isNaN(existingCategoryId)) {
-          // Category already exists, use the existing one
-          finalCategoryId = existingCategoryId;
-          console.log(`Category "${categoryName}" already exists in PrestaShop (ID: ${finalCategoryId}), using existing category`);
+        // Check if categoryPath is provided in the request
+        if (offer.categoryPath && Array.isArray(offer.categoryPath) && offer.categoryPath.length > 0) {
+          categoryPath = offer.categoryPath;
         } else {
-          // Category doesn't exist, create it
-          isNewCategory = true;
-          // Build category description from available Allegro category data
-          let categoryDescription = '';
-          if (categoryName && categoryName !== 'Imported Category') {
-            categoryDescription = `Category imported from Allegro: ${categoryName}`;
-            if (allegroCategory && allegroCategory.leaf !== undefined) {
-              categoryDescription += ` (${allegroCategory.leaf ? 'Leaf category' : 'Parent category'})`;
-            }
-            if (allegroCategory && allegroCategory.tree && allegroCategory.tree.name) {
-              categoryDescription += ` - Tree: ${allegroCategory.tree.name}`;
+          // Try to build category path from available data
+          // 1. Check if categories list is provided and find the category by ID
+          if (categories && Array.isArray(categories)) {
+            const categoryIdStr = String(offer.category.id);
+            const foundCategory = categories.find(cat => 
+              String(cat.id) === categoryIdStr || String(cat.category?.id) === categoryIdStr
+            );
+            if (foundCategory && foundCategory.path && Array.isArray(foundCategory.path)) {
+              categoryPath = foundCategory.path;
             }
           }
           
-          // Build category XML with real category information
-          const categoryData = {
-            name: [
-              { id: 1, value: categoryName },
-              { id: 2, value: categoryName }
-            ],
-            id_parent: 2,
-            active: 1,
-            link_rewrite: [
-              { id: 1, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') },
-              { id: 2, value: categoryName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') }
-            ]
-          };
-          
-          // Final check right before creating - double protection against race conditions
-          const finalCheck = await findCategoryByName(categoryName);
-          if (finalCheck && !isNaN(finalCheck)) {
-            // Category was created by another request while we were preparing
-            finalCategoryId = finalCheck;
-            console.log(`Category "${categoryName}" was created by another request (ID: ${finalCategoryId}), using existing category`);
-            isNewCategory = false;
-          } else {
-            // Safe to create - no duplicate exists
-            // Add description if available
-            if (categoryDescription) {
-              categoryData.description = [
-                { id: 1, value: categoryDescription },
-                { id: 2, value: categoryDescription }
-              ];
+          // 2. If path not found, try to fetch from Allegro API
+          if (!categoryPath) {
+            // Fetch category data to get parent path
+            const allegroCategory = await allegroApiRequest(`/sale/categories/${offer.category.id}`);
+            if (allegroCategory && allegroCategory.parent) {
+              // Build path by traversing parent chain
+              categoryPath = [];
+              let currentCat = allegroCategory;
+              while (currentCat) {
+                categoryPath.unshift({ id: currentCat.id, name: currentCat.name });
+                if (currentCat.parent && currentCat.parent.id) {
+                  currentCat = await allegroApiRequest(`/sale/categories/${currentCat.parent.id}`);
+                } else {
+                  break;
+                }
+              }
+            } else if (allegroCategory && allegroCategory.name) {
+              // Single category, no parent path
+              categoryPath = [{ id: allegroCategory.id, name: allegroCategory.name }];
             }
-            const categoryXml = buildCategoryXml(categoryData);
-            const categoryRes = await prestashopApiRequest('categories', 'POST', categoryXml);
-            finalCategoryId = categoryRes.category?.id || categoryRes.id || 2;
-            
-            console.log(`Created new category "${categoryName}" (ID: ${finalCategoryId}) from Allegro category ID: ${offer.category.id}`);
           }
         }
         
-        // Handle category image if Allegro provides it (only for newly created categories)
-        if (isNewCategory && allegroCategory && (allegroCategory.image || allegroCategory.imageUrl || allegroCategory.photo)) {
-          try {
-            const categoryImageUrl = allegroCategory.image || allegroCategory.imageUrl || allegroCategory.photo;
-            console.log(`Downloading category image from: ${categoryImageUrl}`);
-            
-            const imageBuffer = await downloadImage(categoryImageUrl);
-            const urlPath = new URL(categoryImageUrl).pathname;
-            const extension = urlPath.match(/\.(jpg|jpeg|png|gif|webp)$/i)?.[1] || 'jpg';
-            const imageName = `category-${finalCategoryId}.${extension}`;
-            
-            console.log(`Uploading category image to PrestaShop category ${finalCategoryId}...`);
-            await uploadCategoryImage(finalCategoryId, imageBuffer, imageName);
-            console.log(`Successfully uploaded category image`);
-          } catch (categoryImageError) {
-            // Category image upload is optional - PrestaShop may not support it via API
-            // Suppress 404 errors for category images as they're not critical
-            if (categoryImageError.response?.status === 404) {
-              console.log(`Category image upload not supported for category ${finalCategoryId} (404 - endpoint may not be available in this PrestaShop version)`);
-            } else {
-              console.warn(`Failed to upload category image:`, categoryImageError.message);
-            }
-            // Continue even if category image upload fails - this is optional
+        // If we have a category path, try to find matching category in PrestaShop
+        if (categoryPath && categoryPath.length > 0) {
+          const matchedCategoryId = await findMatchingCategoryByPath(categoryPath);
+          if (matchedCategoryId && !isNaN(matchedCategoryId)) {
+            finalCategoryId = matchedCategoryId;
+            const pathNames = categoryPath.map(p => p.name).join(' > ');
+            console.log(`Found matching category in PrestaShop (ID: ${finalCategoryId}) for path: ${pathNames}`);
+          } else {
+            const pathNames = categoryPath.map(p => p.name).join(' > ');
+            console.log(`No matching category found in PrestaShop for path: ${pathNames}, using default category (ID: 2)`);
           }
+        } else {
+          console.log(`No category path available for offer ${offer.id}, using default category (ID: 2)`);
         }
       } catch (error) {
-        console.error('Failed to fetch category from Allegro or create category in PrestaShop:', error.message);
+        console.error('Failed to find matching category in PrestaShop:', error.message);
         if (error.response?.data) {
           console.error('Allegro API error details:', error.response.data);
         }
@@ -2483,7 +2850,16 @@ app.post('/api/prestashop/products', async (req, res) => {
       }
     }
     
-    // Method 3: Check alternative image locations (fallback)
+    // Method 3: Add images from description sections (extracted by extractDescription function)
+    if (descriptionImages && descriptionImages.length > 0) {
+      descriptionImages.forEach(imgUrl => {
+        if (imgUrl && imgUrl.length > 0 && !imageUrls.includes(imgUrl)) {
+          imageUrls.push(imgUrl);
+        }
+      });
+    }
+    
+    // Method 4: Check alternative image locations (fallback)
     const altImageFields = ['image', 'imageUrl', 'photo', 'thumbnail'];
     for (const field of altImageFields) {
       if (offer[field] && typeof offer[field] === 'string' && offer[field].startsWith('http')) {
@@ -2493,7 +2869,7 @@ app.post('/api/prestashop/products', async (req, res) => {
       }
     }
     
-    // Method 4: Check if images are in a nested structure (e.g. offer.media.images)
+    // Method 5: Check if images are in a nested structure (e.g. offer.media.images)
     if (offer.media && offer.media.images && Array.isArray(offer.media.images)) {
       offer.media.images.forEach(img => {
         let imgUrl = '';
@@ -2513,16 +2889,22 @@ app.post('/api/prestashop/products', async (req, res) => {
       imagesArrayLength: offer.images?.length || 0,
       hasPrimaryImage: !!offer.primaryImage,
       hasMediaImages: !!(offer.media?.images?.length),
+      descriptionImagesCount: descriptionImages.length,
       extractedCount: imageUrls.length,
       urls: imageUrls
     });
     
-    // Limit to 5 images total
-    imageUrls = imageUrls.slice(0, 5);
+    // PrestaShop can handle many images, but we'll limit to 20 to avoid overwhelming the server
+    // Remove this limit or increase it if needed
+    const MAX_IMAGES = 20;
+    if (imageUrls.length > MAX_IMAGES) {
+      console.log(`Limiting images to ${MAX_IMAGES} (found ${imageUrls.length} total)`);
+      imageUrls = imageUrls.slice(0, MAX_IMAGES);
+    }
     
-    // Upload images to PrestaShop (up to 5 images) - only for newly created products
+    // Upload images to PrestaShop - only for newly created products
     if (isNewProduct && imageUrls.length > 0 && prestashopProductId) {
-      for (let i = 0; i < Math.min(imageUrls.length, 5); i++) {
+      for (let i = 0; i < imageUrls.length; i++) {
         try {
           const imageUrl = imageUrls[i];
           console.log(`Downloading image ${i + 1}/${imageUrls.length} from: ${imageUrl}`);
@@ -2543,7 +2925,7 @@ app.post('/api/prestashop/products', async (req, res) => {
           
           // Small delay between uploads to avoid overwhelming the server
           if (i < imageUrls.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 300));
           }
         } catch (imageError) {
           console.error(`Failed to upload image ${i + 1} (${imageUrls[i]}):`, imageError.message);
