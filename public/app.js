@@ -1955,7 +1955,7 @@ async function fetchProductDetails(offerId) {
                 const fullTextDescription = stripHtml(productDescription).trim();
                 const hasValidDescription = fullTextDescription.length > 0;
                 
-                if (hasValidDescription) {
+                if (hasValidDescription) { 
                     let existingDescription = card.querySelector('.offer-description');
                     const isHtmlDescription = productDescription.includes('<');
                     const descriptionPreview = fullTextDescription.substring(0, 30);
