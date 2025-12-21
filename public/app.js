@@ -1789,6 +1789,9 @@ async function displayOffersPage() {
         checkbox.addEventListener('change', updateImportButtons);
     });
     
+    // Sync selected state for any pre-checked checkboxes
+    updateImportButtons();
+    
     // Make clicking on the product card toggle its checkbox (if present)
     document.querySelectorAll('.offer-card').forEach(card => {
         card.addEventListener('click', (event) => {
@@ -1803,6 +1806,12 @@ async function displayOffersPage() {
             }
             
             checkbox.checked = !checkbox.checked;
+            // Update selected class immediately
+            if (checkbox.checked) {
+                card.classList.add('selected');
+            } else {
+                card.classList.remove('selected');
+            }
             updateImportButtons();
         });
     });
@@ -2823,6 +2832,18 @@ function updateImportButtons() {
     const selectedCheckboxes = document.querySelectorAll('.offer-checkbox:checked');
     const importSelectedBtn = document.getElementById('importSelectedBtn');
     const authenticated = checkAuthentication();
+    
+    // Update selected class on all offer cards based on checkbox state
+    document.querySelectorAll('.offer-card').forEach(card => {
+        const checkbox = card.querySelector('.offer-checkbox');
+        if (checkbox) {
+            if (checkbox.checked) {
+                card.classList.add('selected');
+            } else {
+                card.classList.remove('selected');
+            }
+        }
+    });
     
     if (importSelectedBtn) {
         importSelectedBtn.disabled = !authenticated || selectedCheckboxes.length === 0;

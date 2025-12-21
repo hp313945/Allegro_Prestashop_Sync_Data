@@ -2425,21 +2425,55 @@ async function findProductByReference(reference) {
       // Verify the product still exists in PrestaShop
       try {
         await prestashopApiRequest(`products/${existingProductId}`, 'GET');
+        console.log(`Found product in mapping cache: reference "${reference}" -> PrestaShop ID ${existingProductId}`);
         return existingProductId; // Product exists, return its ID
       } catch (verifyError) {
         // Product doesn't exist anymore, remove from mapping
+        console.log(`Product ${existingProductId} no longer exists in PrestaShop, removing from mapping`);
         delete productMappings[reference];
         saveProductMappings();
       }
     }
     
     // If no mapping or product doesn't exist, search PrestaShop by reference
-    // PrestaShop API allows filtering by reference
+    // Try multiple PrestaShop API filter syntaxes for compatibility
     const encodedReference = encodeURIComponent(reference);
-    const data = await prestashopApiRequest(`products?filter[reference]=[${encodedReference}]&limit=1`, 'GET');
+    let data = null;
+    let products = [];
+    
+    // Try different filter syntaxes
+    const filterAttempts = [
+      `products?filter[reference]=${encodedReference}`,
+      `products?filter[reference]=[${encodedReference}]`,
+      `products?filter[reference]=${reference}`,
+      `products?filter[reference]=[${reference}]`
+    ];
+    
+    for (const filterUrl of filterAttempts) {
+      try {
+        data = await prestashopApiRequest(filterUrl, 'GET');
+        if (data) {
+          break; // Success, exit loop
+        }
+      } catch (err) {
+        // Try next syntax
+        continue;
+      }
+    }
+    
+    if (!data) {
+      // If all filter attempts failed, try getting all products and filtering client-side (limited)
+      // This is a fallback - only use if reference search fails
+      console.log(`PrestaShop filter API failed, trying fallback search for reference "${reference}"`);
+      try {
+        data = await prestashopApiRequest('products?limit=1000', 'GET');
+      } catch (fallbackError) {
+        console.error('Fallback product search also failed:', fallbackError.message);
+        return null;
+      }
+    }
     
     // PrestaShop returns products in format: { products: [{ product: {...} }] } or { product: {...} }
-    let products = [];
     if (data.products) {
       if (Array.isArray(data.products)) {
         products = data.products.map(item => item.product || item);
@@ -2454,9 +2488,11 @@ async function findProductByReference(reference) {
     
     // Find product with matching reference
     for (const product of products) {
-      if (product.reference && product.reference.toString() === reference.toString()) {
+      const productRef = product.reference || product.product?.reference;
+      if (productRef && productRef.toString() === reference.toString()) {
         const productId = product.id || product.product?.id;
         if (productId) {
+          console.log(`Found existing product in PrestaShop: reference "${reference}" -> PrestaShop ID ${productId}`);
           // Update mapping for future lookups
           productMappings[reference] = {
             prestashopProductId: productId,
@@ -2469,9 +2505,13 @@ async function findProductByReference(reference) {
       }
     }
     
+    console.log(`No product found with reference "${reference}" in PrestaShop`);
     return null; // Product not found
   } catch (error) {
     console.error('Error finding product by reference:', error.message);
+    if (error.response?.data) {
+      console.error('PrestaShop API error details:', error.response.data);
+    }
     return null; // Return null on error to allow creation to proceed
   }
 }
@@ -2677,15 +2717,32 @@ app.post('/api/prestashop/products', async (req, res) => {
     }
     
     // Check if product already exists in PrestaShop before creating
-    const existingProductId = await findProductByReference(offer.id.toString());
+    let existingProductId = await findProductByReference(offer.id.toString());
     let prestashopProductId = null;
     let isNewProduct = false;
     
+    // Double-check: verify product doesn't exist (prevents race conditions)
     if (existingProductId) {
-      // Product already exists, use the existing one
-      prestashopProductId = existingProductId;
-      console.log(`Product with reference "${offer.id}" already exists in PrestaShop (ID: ${prestashopProductId}), using existing product`);
-    } else {
+      try {
+        // Verify the product actually exists and has the correct reference
+        const verifyProduct = await prestashopApiRequest(`products/${existingProductId}`, 'GET');
+        const productRef = verifyProduct.product?.reference || verifyProduct.reference;
+        if (productRef && productRef.toString() === offer.id.toString()) {
+          prestashopProductId = existingProductId;
+          console.log(`Product with reference "${offer.id}" already exists in PrestaShop (ID: ${prestashopProductId}), using existing product`);
+        } else {
+          // Reference doesn't match, treat as new product
+          console.log(`Product ID ${existingProductId} exists but reference doesn't match, creating new product`);
+          existingProductId = null;
+        }
+      } catch (verifyError) {
+        // Product doesn't exist, treat as new
+        console.log(`Product ID ${existingProductId} no longer exists, creating new product`);
+        existingProductId = null;
+      }
+    }
+    
+    if (!existingProductId) {
       // Product doesn't exist, create it
       isNewProduct = true;
       // Build product data for PrestaShop
@@ -2766,6 +2823,14 @@ app.post('/api/prestashop/products', async (req, res) => {
       }
       
       console.log(`Created new product "${baseName}" (ID: ${prestashopProductId}) from Allegro offer ID: ${offer.id}`);
+      
+      // Save mapping immediately after creation to prevent duplicates
+      productMappings[offer.id.toString()] = {
+        prestashopProductId: prestashopProductId,
+        allegroOfferId: offer.id.toString(),
+        syncedAt: new Date().toISOString()
+      };
+      saveProductMappings();
     }
 
     // Update stock
@@ -2934,10 +2999,11 @@ app.post('/api/prestashop/products', async (req, res) => {
       }
     }
 
-    // Store product mapping
-    productMappings[offer.id] = {
+    // Store product mapping (update if not already saved, or refresh timestamp)
+    const offerIdStr = offer.id.toString();
+    productMappings[offerIdStr] = {
       prestashopProductId: prestashopProductId,
-      allegroOfferId: offer.id,
+      allegroOfferId: offerIdStr,
       syncedAt: new Date().toISOString()
     };
     saveProductMappings();
