@@ -334,7 +334,6 @@ function updateButtonStates() {
 function updateCsvExportButtonsState() {
     const exportCategoriesCsvBtn = document.getElementById('exportCategoriesCsvBtn');
     const exportProductsCsvBtn = document.getElementById('exportProductsCsvBtn');
-    const exportCombinationsCsvBtn = document.getElementById('exportCombinationsCsvBtn');
 
     const canUsePrestashop = prestashopConfigured && prestashopAuthorized;
 
@@ -350,12 +349,6 @@ function updateCsvExportButtonsState() {
     if (exportProductsCsvBtn) {
         const hasImportedProducts = Array.isArray(importedOffers) && importedOffers.length > 0;
         exportProductsCsvBtn.disabled = !canUsePrestashop || !hasImportedProducts;
-    }
-
-    // Combinations CSV: same condition as products (needs imported products)
-    if (exportCombinationsCsvBtn) {
-        const hasImportedProducts = Array.isArray(importedOffers) && importedOffers.length > 0;
-        exportCombinationsCsvBtn.disabled = !canUsePrestashop || !hasImportedProducts;
     }
 }
 
@@ -486,10 +479,6 @@ function setupEventListeners() {
     const exportProductsCsvBtn = document.getElementById('exportProductsCsvBtn');
     if (exportProductsCsvBtn) {
         exportProductsCsvBtn.addEventListener('click', exportProductsCsv);
-    }
-    const exportCombinationsCsvBtn = document.getElementById('exportCombinationsCsvBtn');
-    if (exportCombinationsCsvBtn) {
-        exportCombinationsCsvBtn.addEventListener('click', exportCombinationsCsv);
     }
     
     // Sync Stock Log event listeners
@@ -3871,53 +3860,6 @@ async function exportProductsCsv() {
             messageEl.textContent = 'Products exported successfully!';
         }
         showToast('Products exported successfully!', 'success', 3000);
-    } catch (error) {
-        console.error('Export error:', error);
-        if (messageEl) {
-            messageEl.className = 'message error';
-            messageEl.textContent = `Export failed: ${error.message}`;
-        }
-        showToast(`Export failed: ${error.message}`, 'error', 5000);
-    } finally {
-        // Recalculate button states based on latest configuration/data
-        updateCsvExportButtonsState();
-    }
-}
-
-async function exportCombinationsCsv() {
-    const btn = document.getElementById('exportCombinationsCsvBtn');
-    const messageEl = document.getElementById('csvExportMessage');
-    
-    if (btn) btn.disabled = true;
-    if (messageEl) {
-        messageEl.style.display = 'block';
-        messageEl.className = 'message info';
-        messageEl.textContent = 'Exporting combinations...';
-    }
-    
-    try {
-        const response = await fetch(`${API_BASE}/api/export/combinations.csv`);
-        
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: 'Failed to export combinations' }));
-            throw new Error(errorData.error || 'Failed to export combinations');
-        }
-        
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'combinations_import.csv';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-        
-        if (messageEl) {
-            messageEl.className = 'message success';
-            messageEl.textContent = 'Combinations exported successfully!';
-        }
-        showToast('Combinations exported successfully!', 'success', 3000);
     } catch (error) {
         console.error('Export error:', error);
         if (messageEl) {

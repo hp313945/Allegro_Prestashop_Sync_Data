@@ -3428,7 +3428,7 @@ async function exportCategoriesToCsv() {
       }
     }
 
-    // Build category hierarchy map
+    // Build category hierarchy map (for parent lookups)
     const categoryMap = {};
     allCategories.forEach(cat => {
       categoryMap[cat.id] = cat;
@@ -3451,100 +3451,113 @@ async function exportCategoriesToCsv() {
 
     const rows = [arrayToCsvRow(header)];
 
-    // Process each category
-    allCategories.forEach(cat => {
-      const id = cat.id || '';
-      const active = cat.active === '1' || cat.active === 1 ? '1' : '0';
-      
-      // Get name (first language value)
-      let name = '';
-      if (cat.name) {
-        if (Array.isArray(cat.name)) {
-          name = cat.name[0]?.value || cat.name[0] || '';
-        } else if (cat.name.value) {
-          name = cat.name.value;
-        } else if (typeof cat.name === 'string') {
-          name = cat.name;
+    // Process each category - fetch full details
+    for (const cat of allCategories) {
+      // Fetch full category details - list endpoint only returns basic fields
+      let fullCategory = cat;
+      if (cat.id) {
+        try {
+          const categoryData = await prestashopApiRequest(`categories/${cat.id}`, 'GET');
+          // PrestaShop returns: { category: {...} } or { categories: [{ category: {...} }] }
+          if (categoryData.category) {
+            fullCategory = categoryData.category;
+          } else if (categoryData.categories && Array.isArray(categoryData.categories) && categoryData.categories.length > 0) {
+            fullCategory = categoryData.categories[0].category || categoryData.categories[0];
+          } else if (categoryData.id) {
+            fullCategory = categoryData;
+          }
+        } catch (e) {
+          console.warn(`Failed to fetch full details for category ${cat.id}, using basic data:`, e.message);
+          // Continue with basic category data if full fetch fails
         }
       }
+      const id = fullCategory.id || '';
+      const active = (fullCategory.active === '1' || fullCategory.active === 1) ? '1' : '0';
+      
+      // Helper to get localized field
+      const getLocalizedField = (field) => {
+        if (!fullCategory[field]) return '';
+        if (Array.isArray(fullCategory[field])) {
+          return fullCategory[field][0]?.value || fullCategory[field][0] || '';
+        }
+        if (fullCategory[field].value) return fullCategory[field].value;
+        if (typeof fullCategory[field] === 'string') return fullCategory[field];
+        return '';
+      };
 
-      // Get parent category name
-      let parentCategory = 'Home';
-      if (cat.id_parent && cat.id_parent !== '0' && cat.id_parent !== 0 && categoryMap[cat.id_parent]) {
-        const parent = categoryMap[cat.id_parent];
-        if (parent && parent.name) {
-          if (Array.isArray(parent.name)) {
-            parentCategory = parent.name[0]?.value || parent.name[0] || 'Home';
-          } else if (parent.name.value) {
-            parentCategory = parent.name.value;
-          } else if (typeof parent.name === 'string') {
-            parentCategory = parent.name;
+      const name = getLocalizedField('name');
+
+      // Get parent category name or ID
+      let parentCategory = '';
+      const parentId = fullCategory.id_parent || fullCategory.id_parent_default || '';
+      if (parentId && parentId !== '0' && parentId !== 0 && parentId !== '1' && parentId !== 1) {
+        // Try to get parent name from map first
+        if (categoryMap[parentId]) {
+          const parent = categoryMap[parentId];
+          if (parent && parent.name) {
+            if (Array.isArray(parent.name)) {
+              parentCategory = parent.name[0]?.value || parent.name[0] || parentId;
+            } else if (parent.name.value) {
+              parentCategory = parent.name.value;
+            } else if (typeof parent.name === 'string') {
+              parentCategory = parent.name;
+            } else {
+              parentCategory = parentId;
+            }
+          } else {
+            parentCategory = parentId;
+          }
+        } else {
+          // If not in map, try to fetch it
+          try {
+            const parentData = await prestashopApiRequest(`categories/${parentId}`, 'GET');
+            const parent = parentData.category || parentData;
+            if (parent && parent.name) {
+              if (Array.isArray(parent.name)) {
+                parentCategory = parent.name[0]?.value || parent.name[0] || parentId;
+              } else if (parent.name.value) {
+                parentCategory = parent.name.value;
+              } else if (typeof parent.name === 'string') {
+                parentCategory = parent.name;
+              } else {
+                parentCategory = parentId;
+              }
+            } else {
+              parentCategory = parentId;
+            }
+          } catch (e) {
+            // If fetch fails, use parent ID
+            parentCategory = parentId;
           }
         }
+      } else {
+        // Root category (parent is 0, 1, or Home)
+        parentCategory = 'Home';
       }
 
-      const rootCategory = (cat.id_parent === '0' || cat.id_parent === 0 || !cat.id_parent) ? '0' : '0';
+      // Root category: 1 if it's a root category (parent is 0, 1, or Home), 0 otherwise
+      const rootCategory = (parentId === '0' || parentId === 0 || parentId === '1' || parentId === 1 || !parentId) ? '1' : '0';
 
-      // Get description
-      let description = '';
-      if (cat.description) {
-        if (Array.isArray(cat.description)) {
-          description = cat.description[0]?.value || cat.description[0] || '';
-        } else if (cat.description.value) {
-          description = cat.description.value;
-        } else if (typeof cat.description === 'string') {
-          description = cat.description;
-        }
+      const description = getLocalizedField('description');
+      const metaTitle = getLocalizedField('meta_title');
+      const metaKeywords = getLocalizedField('meta_keywords');
+      const metaDescription = getLocalizedField('meta_description');
+      const urlRewritten = getLocalizedField('link_rewrite');
+
+      // Extract image URL from category
+      let imageUrl = '';
+      if (fullCategory.id) {
+        // Build image URL: baseUrl/img/c/{id1}/{id2}/{id3}/{id}.jpg
+        const catId = fullCategory.id.toString();
+        const id1 = catId.slice(-1);
+        const id2 = catId.length > 1 ? catId.slice(-2, -1) : '0';
+        const id3 = catId.length > 2 ? catId.slice(-3, -2) : '0';
+        const baseUrl = prestashopCredentials.baseUrl.trim().replace(/\/+$/, '');
+        imageUrl = `${baseUrl}/img/c/${id3}/${id2}/${id1}/${catId}.jpg`;
+        
+        // Verify image exists by checking if we can get category image info
+        // (We'll include the URL anyway, PrestaShop will handle if it doesn't exist)
       }
-
-      // Get meta fields
-      let metaTitle = '';
-      if (cat.meta_title) {
-        if (Array.isArray(cat.meta_title)) {
-          metaTitle = cat.meta_title[0]?.value || cat.meta_title[0] || '';
-        } else if (cat.meta_title.value) {
-          metaTitle = cat.meta_title.value;
-        } else if (typeof cat.meta_title === 'string') {
-          metaTitle = cat.meta_title;
-        }
-      }
-
-      let metaKeywords = '';
-      if (cat.meta_keywords) {
-        if (Array.isArray(cat.meta_keywords)) {
-          metaKeywords = cat.meta_keywords[0]?.value || cat.meta_keywords[0] || '';
-        } else if (cat.meta_keywords.value) {
-          metaKeywords = cat.meta_keywords.value;
-        } else if (typeof cat.meta_keywords === 'string') {
-          metaKeywords = cat.meta_keywords;
-        }
-      }
-
-      let metaDescription = '';
-      if (cat.meta_description) {
-        if (Array.isArray(cat.meta_description)) {
-          metaDescription = cat.meta_description[0]?.value || cat.meta_description[0] || '';
-        } else if (cat.meta_description.value) {
-          metaDescription = cat.meta_description.value;
-        } else if (typeof cat.meta_description === 'string') {
-          metaDescription = cat.meta_description;
-        }
-      }
-
-      // Get URL rewritten
-      let urlRewritten = '';
-      if (cat.link_rewrite) {
-        if (Array.isArray(cat.link_rewrite)) {
-          urlRewritten = cat.link_rewrite[0]?.value || cat.link_rewrite[0] || '';
-        } else if (cat.link_rewrite.value) {
-          urlRewritten = cat.link_rewrite.value;
-        } else if (typeof cat.link_rewrite === 'string') {
-          urlRewritten = cat.link_rewrite;
-        }
-      }
-
-      // Image URL (not typically in PrestaShop category API response, but we'll try)
-      const imageUrl = '';
 
       const row = [
         id,
@@ -3561,7 +3574,7 @@ async function exportCategoriesToCsv() {
       ];
 
       rows.push(arrayToCsvRow(row));
-    });
+    }
 
     return rows.join('\n');
   } catch (error) {
@@ -3682,12 +3695,31 @@ async function exportProductsToCsv() {
 
     // Process each product
     for (const product of allProducts) {
+      // Fetch full product details - list endpoint only returns basic fields
+      let fullProduct = product;
+      if (product.id) {
+        try {
+          const productData = await prestashopApiRequest(`products/${product.id}`, 'GET');
+          // PrestaShop returns: { product: {...} } or { products: [{ product: {...} }] }
+          if (productData.product) {
+            fullProduct = productData.product;
+          } else if (productData.products && Array.isArray(productData.products) && productData.products.length > 0) {
+            fullProduct = productData.products[0].product || productData.products[0];
+          } else if (productData.id) {
+            fullProduct = productData;
+          }
+        } catch (e) {
+          console.warn(`Failed to fetch full details for product ${product.id}, using basic data:`, e.message);
+          // Continue with basic product data if full fetch fails
+        }
+      }
+
       // Get category names
       let categoryNames = [];
-      if (product.associations && product.associations.categories && product.associations.categories.category) {
-        const categories = Array.isArray(product.associations.categories.category)
-          ? product.associations.categories.category
-          : [product.associations.categories.category];
+      if (fullProduct.associations && fullProduct.associations.categories && fullProduct.associations.categories.category) {
+        const categories = Array.isArray(fullProduct.associations.categories.category)
+          ? fullProduct.associations.categories.category
+          : [fullProduct.associations.categories.category];
         
         // Fetch category details to get names
         for (const catRef of categories) {
@@ -3714,7 +3746,7 @@ async function exportProductsToCsv() {
       // Get stock quantity
       let quantity = '0';
       try {
-        const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${product.id}]&filter[id_product_attribute]=[0]`, 'GET');
+        const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${fullProduct.id}]&filter[id_product_attribute]=[0]`, 'GET');
         if (stockData.stock_availables) {
           const stocks = Array.isArray(stockData.stock_availables) 
             ? stockData.stock_availables 
@@ -3730,45 +3762,45 @@ async function exportProductsToCsv() {
 
       // Helper to get localized field
       const getLocalizedField = (field) => {
-        if (!product[field]) return '';
-        if (Array.isArray(product[field])) {
-          return product[field][0]?.value || product[field][0] || '';
+        if (!fullProduct[field]) return '';
+        if (Array.isArray(fullProduct[field])) {
+          return fullProduct[field][0]?.value || fullProduct[field][0] || '';
         }
-        if (product[field].value) return product[field].value;
-        if (typeof product[field] === 'string') return product[field];
+        if (fullProduct[field].value) return fullProduct[field].value;
+        if (typeof fullProduct[field] === 'string') return fullProduct[field];
         return '';
       };
 
-      const id = product.id || '';
-      const active = (product.active === '1' || product.active === 1) ? '1' : '0';
+      const id = fullProduct.id || '';
+      const active = (fullProduct.active === '1' || fullProduct.active === 1) ? '1' : '0';
       const name = getLocalizedField('name');
       const categories = categoryNames.join(',');
-      const price = product.price || '0.00';
-      const taxRulesId = product.id_tax_rules_group || '1';
-      const wholesalePrice = product.wholesale_price || '';
-      const onSale = (product.on_sale === '1' || product.on_sale === 1) ? '1' : '0';
+      const price = fullProduct.price || '0.00';
+      const taxRulesId = fullProduct.id_tax_rules_group || '1';
+      const wholesalePrice = fullProduct.wholesale_price || '';
+      const onSale = (fullProduct.on_sale === '1' || fullProduct.on_sale === 1) ? '1' : '0';
       const discountAmount = '';
       const discountPercent = '';
       const discountFrom = '';
       const discountTo = '';
-      const reference = product.reference || '';
+      const reference = fullProduct.reference || '';
       const supplierReference = '';
       const supplier = '';
       const manufacturer = '';
-      const ean13 = product.ean13 || '';
-      const upc = product.upc || '';
-      const ecotax = product.ecotax || '';
-      const width = product.width || '';
-      const height = product.height || '';
-      const depth = product.depth || '';
-      const weight = product.weight || '';
+      const ean13 = fullProduct.ean13 || '';
+      const upc = fullProduct.upc || '';
+      const ecotax = fullProduct.ecotax || '';
+      const width = fullProduct.width || '';
+      const height = fullProduct.height || '';
+      const depth = fullProduct.depth || '';
+      const weight = fullProduct.weight || '';
       const deliveryTimeInStock = '';
       const deliveryTimeOutOfStock = '';
-      const minimalQuantity = product.minimal_quantity || '1';
+      const minimalQuantity = fullProduct.minimal_quantity || '1';
       const lowStockLevel = '';
       const emailOnLowStock = '';
-      const visibility = product.visibility || 'both';
-      const additionalShippingCost = product.additional_shipping_cost || '';
+      const visibility = fullProduct.visibility || 'both';
+      const additionalShippingCost = fullProduct.additional_shipping_cost || '';
       const unity = '';
       const unitPrice = '';
       const summary = getLocalizedField('description_short');
@@ -3780,27 +3812,62 @@ async function exportProductsToCsv() {
       const urlRewritten = getLocalizedField('link_rewrite');
       const textInStock = '';
       const textBackorder = '';
-      const availableForOrder = (product.available_for_order === '1' || product.available_for_order === 1) ? '1' : '0';
-      const productAvailableDate = '';
-      const productCreationDate = '';
-      const showPrice = (product.show_price === '1' || product.show_price === 1) ? '1' : '0';
-      const imageUrls = '';
-      const imageAltTexts = '';
+      const availableForOrder = (fullProduct.available_for_order === '1' || fullProduct.available_for_order === 1) ? '1' : '0';
+      const productAvailableDate = fullProduct.available_date || '';
+      const productCreationDate = fullProduct.date_add || '';
+      const showPrice = (fullProduct.show_price === '1' || fullProduct.show_price === 1) ? '1' : '0';
+      
+      // Extract image URLs from product associations
+      let imageUrls = [];
+      let imageAltTexts = [];
+      if (fullProduct.associations && fullProduct.associations.images && fullProduct.associations.images.image) {
+        const images = Array.isArray(fullProduct.associations.images.image)
+          ? fullProduct.associations.images.image
+          : [fullProduct.associations.images.image];
+        
+        // Get link_rewrite for image filename
+        let linkRewrite = 'product';
+        if (fullProduct.link_rewrite) {
+          if (Array.isArray(fullProduct.link_rewrite)) {
+            linkRewrite = fullProduct.link_rewrite[0]?.value || fullProduct.link_rewrite[0] || 'product';
+          } else if (typeof fullProduct.link_rewrite === 'object' && fullProduct.link_rewrite.value) {
+            linkRewrite = fullProduct.link_rewrite.value;
+          } else if (typeof fullProduct.link_rewrite === 'string') {
+            linkRewrite = fullProduct.link_rewrite;
+          }
+        }
+        
+        for (const img of images) {
+          if (img.id) {
+            // Build image URL: baseUrl/img/p/{id1}/{id2}/{id3}/{id}/{hash}.jpg
+            const imgId = img.id.toString();
+            const id1 = imgId.slice(-1);
+            const id2 = imgId.length > 1 ? imgId.slice(-2, -1) : '0';
+            const id3 = imgId.length > 2 ? imgId.slice(-3, -2) : '0';
+            const baseUrl = prestashopCredentials.baseUrl.trim().replace(/\/+$/, '');
+            const imageUrl = `${baseUrl}/img/p/${id3}/${id2}/${id1}/${imgId}/${linkRewrite}-${imgId}.jpg`;
+            imageUrls.push(imageUrl);
+            imageAltTexts.push(name || `Product ${id} image ${imgId}`);
+          }
+        }
+      }
+      const imageUrlsStr = imageUrls.join(',');
+      const imageAltTextsStr = imageAltTexts.join(',');
       const deleteExistingImages = '0';
       const features = '';
-      const availableOnlineOnly = (product.online_only === '1' || product.online_only === 1) ? '1' : '0';
-      const condition = product.condition || 'new';
+      const availableOnlineOnly = (fullProduct.online_only === '1' || fullProduct.online_only === 1) ? '1' : '0';
+      const condition = fullProduct.condition || 'new';
       const customizable = '0';
       const uploadableFiles = '0';
       const textFields = '0';
       const outOfStockAction = '';
-      const virtualProduct = (product.is_virtual === '1' || product.is_virtual === 1) ? '1' : '0';
+      const virtualProduct = (fullProduct.is_virtual === '1' || fullProduct.is_virtual === 1) ? '1' : '0';
       const fileUrl = '';
       const allowedDownloads = '';
       const expirationDate = '';
       const numberOfDays = '';
       const shopId = '';
-      const advancedStockManagement = (product.advanced_stock_management === '1' || product.advanced_stock_management === 1) ? '1' : '0';
+      const advancedStockManagement = (fullProduct.advanced_stock_management === '1' || fullProduct.advanced_stock_management === 1) ? '1' : '0';
       const dependsOnStock = '';
       const warehouse = '';
       const accessories = '';
@@ -3812,8 +3879,8 @@ async function exportProductsToCsv() {
         deliveryTimeInStock, deliveryTimeOutOfStock, quantity, minimalQuantity, lowStockLevel,
         emailOnLowStock, visibility, additionalShippingCost, unity, unitPrice, summary, description,
         tags, metaTitle, metaKeywords, metaDescription, urlRewritten, textInStock, textBackorder,
-        availableForOrder, productAvailableDate, productCreationDate, showPrice, imageUrls,
-        imageAltTexts, deleteExistingImages, features, availableOnlineOnly, condition,
+        availableForOrder, productAvailableDate, productCreationDate, showPrice, imageUrlsStr,
+        imageAltTextsStr, deleteExistingImages, features, availableOnlineOnly, condition,
         customizable, uploadableFiles, textFields, outOfStockAction, virtualProduct, fileUrl,
         allowedDownloads, expirationDate, numberOfDays, shopId, advancedStockManagement,
         dependsOnStock, warehouse, accessories
@@ -3825,196 +3892,6 @@ async function exportProductsToCsv() {
     return rows.join('\n');
   } catch (error) {
     throw new Error(`Failed to export products: ${error.message}`);
-  }
-}
-
-/**
- * Export combinations to CSV format
- */
-async function exportCombinationsToCsv() {
-  try {
-    // Fetch all products with combinations
-    let allProducts = [];
-    let limit = 1000;
-    let offset = 0;
-    let hasMore = true;
-
-    while (hasMore) {
-      const data = await prestashopApiRequest(`products?limit=${limit}${offset > 0 ? `&offset=${offset}` : ''}`, 'GET');
-      
-      let products = [];
-      if (data.products) {
-        if (Array.isArray(data.products)) {
-          products = data.products.map(item => item.product || item);
-        } else if (data.products.product) {
-          products = Array.isArray(data.products.product) 
-            ? data.products.product 
-            : [data.products.product];
-        }
-      } else if (data.product) {
-        products = Array.isArray(data.product) ? data.product : [data.product];
-      }
-
-      if (products.length === 0) {
-        hasMore = false;
-      } else {
-        allProducts = allProducts.concat(products);
-        if (products.length < limit) {
-          hasMore = false;
-        } else {
-          offset += limit;
-        }
-      }
-    }
-
-    // CSV Header
-    const header = [
-      'Product ID*',
-      'Attribute (Name:Type:Position)*',
-      'Value (Value:Position)*',
-      'Supplier reference',
-      'Reference',
-      'EAN13',
-      'UPC',
-      'Wholesale price',
-      'Impact on price',
-      'Ecotax',
-      'Quantity',
-      'Minimal quantity',
-      'Low stock level',
-      'Impact on weight',
-      'Default (0 = No, 1 = Yes)',
-      'Combination available date',
-      'Image position',
-      'Image URLs (x,y,z...)',
-      'Image alt texts (x,y,z...)',
-      'ID / Name of shop',
-      'Advanced Stock Managment',
-      'Depends on stock',
-      'Warehouse'
-    ];
-
-    const rows = [arrayToCsvRow(header)];
-
-    // Process each product's combinations
-    for (const product of allProducts) {
-      const productId = product.id;
-      
-      // Fetch product combinations
-      try {
-        const combData = await prestashopApiRequest(`combinations?filter[id_product]=[${productId}]`, 'GET');
-        let combinations = [];
-        
-        if (combData.combinations) {
-          if (Array.isArray(combData.combinations)) {
-            combinations = combData.combinations.map(item => item.combination || item);
-          } else if (combData.combinations.combination) {
-            combinations = Array.isArray(combData.combinations.combination)
-              ? combData.combinations.combination
-              : [combData.combinations.combination];
-          }
-        } else if (combData.combination) {
-          combinations = Array.isArray(combData.combination) ? combData.combination : [combData.combination];
-        }
-
-        // Process each combination
-        for (const combination of combinations) {
-          // Fetch combination details to get attributes
-          try {
-            const combDetail = await prestashopApiRequest(`combinations/${combination.id}`, 'GET');
-            const comb = combDetail.combination || combDetail;
-
-            // Get attributes
-            let attributes = [];
-            let values = [];
-            if (comb.associations && comb.associations.product_option_values) {
-              const optionValues = Array.isArray(comb.associations.product_option_values.product_option_value)
-                ? comb.associations.product_option_values.product_option_value
-                : [comb.associations.product_option_values.product_option_value];
-
-              for (const optVal of optionValues) {
-                try {
-                  // Fetch option value to get attribute name
-                  const optValData = await prestashopApiRequest(`product_option_values/${optVal.id}`, 'GET');
-                  const optValObj = optValData.product_option_value || optValData;
-                  
-                  if (optValObj && optValObj.id_attribute_group) {
-                    // Fetch attribute group
-                    const attrGroupData = await prestashopApiRequest(`product_option_groups/${optValObj.id_attribute_group}`, 'GET');
-                    const attrGroup = attrGroupData.product_option_group || attrGroupData;
-                    
-                    const attrName = attrGroup.name ? (Array.isArray(attrGroup.name) ? attrGroup.name[0]?.value : attrGroup.name.value || attrGroup.name) : 'Attribute';
-                    const attrType = 'select'; // Default type
-                    const attrPosition = attributes.length;
-                    
-                    const valName = optValObj.name ? (Array.isArray(optValObj.name) ? optValObj.name[0]?.value : optValObj.name.value || optValObj.name) : 'Value';
-                    const valPosition = values.length;
-
-                    attributes.push(`${attrName}:${attrType}:${attrPosition}`);
-                    values.push(`${valName}:${valPosition}`);
-                  }
-                } catch (e) {
-                  // Skip if fetch fails
-                }
-              }
-            }
-
-            // Get stock for this combination
-            let quantity = '0';
-            try {
-              const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${productId}]&filter[id_product_attribute]=[${combination.id}]`, 'GET');
-              if (stockData.stock_availables) {
-                const stocks = Array.isArray(stockData.stock_availables) 
-                  ? stockData.stock_availables 
-                  : [stockData.stock_availables];
-                if (stocks.length > 0) {
-                  const stock = stocks[0].stock_available || stocks[0];
-                  quantity = stock.quantity || '0';
-                }
-              }
-            } catch (e) {
-              // Use default
-            }
-
-            const row = [
-              productId,
-              attributes.join(', '),
-              values.join(', '),
-              '', // Supplier reference
-              comb.reference || '',
-              comb.ean13 || '',
-              comb.upc || '',
-              comb.wholesale_price || '',
-              comb.price || '',
-              comb.ecotax || '',
-              quantity,
-              comb.minimal_quantity || '1',
-              '', // Low stock level
-              comb.weight || '',
-              (comb.default_on === '1' || comb.default_on === 1) ? '1' : '0',
-              '', // Combination available date
-              '', // Image position
-              '', // Image URLs
-              '', // Image alt texts
-              '', // Shop ID
-              (comb.advanced_stock_management === '1' || comb.advanced_stock_management === 1) ? '1' : '0',
-              '', // Depends on stock
-              ''  // Warehouse
-            ];
-
-            rows.push(arrayToCsvRow(row));
-          } catch (e) {
-            // Skip combination if detail fetch fails
-          }
-        }
-      } catch (e) {
-        // Skip if combinations fetch fails (product might not have combinations)
-      }
-    }
-
-    return rows.join('\n');
-  } catch (error) {
-    throw new Error(`Failed to export combinations: ${error.message}`);
   }
 }
 
@@ -4059,31 +3936,6 @@ app.get('/api/export/products.csv', async (req, res) => {
     
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="products_import.csv"');
-    res.send('\ufeff' + csvContent); // Add BOM for Excel compatibility
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * Export combinations CSV endpoint
- */
-app.get('/api/export/combinations.csv', async (req, res) => {
-  try {
-    if (!prestashopCredentials.baseUrl || !prestashopCredentials.apiKey) {
-      return res.status(400).json({
-        success: false,
-        error: 'PrestaShop not configured'
-      });
-    }
-
-    const csvContent = await exportCombinationsToCsv();
-    
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="combinations_import.csv"');
     res.send('\ufeff' + csvContent); // Add BOM for Excel compatibility
   } catch (error) {
     res.status(500).json({
