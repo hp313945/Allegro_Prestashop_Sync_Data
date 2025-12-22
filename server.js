@@ -3136,8 +3136,8 @@ app.post('/api/prestashop/products', async (req, res) => {
 
     // Update stock
     try {
-      // Get stock available ID for the product
-      const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]`, 'GET');
+      // Get stock available ID for the product (filter by id_product_attribute=0 to get base product stock)
+      const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]&filter[id_product_attribute]=[0]`, 'GET');
       let stockAvailableId = null;
       
       if (stockData.stock_availables) {
@@ -3150,16 +3150,15 @@ app.post('/api/prestashop/products', async (req, res) => {
         stockAvailableId = stockData.stock_available.id;
       }
       
-      // Ensure stock is at least 1 if it's 0, so product appears in product panel
-      // Products with 0 quantity won't appear unless out_of_stock behavior allows orders
+      // Use the actual stock value - stock should display correct current stock
+      // The out_of_stock setting controls whether orders are allowed when stock is 0
       const finalStock = parseInt(stock) || 0;
-      const quantityToSet = finalStock > 0 ? finalStock : 1; // Set minimum 1 if stock is 0
       
       if (stockAvailableId) {
         // Update existing stock_available
         const stockXml = buildStockAvailableXml({
           id: stockAvailableId,
-          quantity: quantityToSet,
+          quantity: finalStock, // Use actual stock value, not artificially inflated
           id_product: prestashopProductId,
           out_of_stock: finalStock === 0 ? 1 : 2 // Allow orders when stock is 0, deny when stock > 0
         });
@@ -3369,9 +3368,64 @@ app.get('/api/prestashop/products/:productId', async (req, res) => {
       });
     }
     
+    // Fetch stock information for the product
+    let stock = 0;
+    try {
+      const stockEndpoint = `stock_availables?filter[id_product]=[${productId}]&filter[id_product_attribute]=[0]`;
+      const stockData = await prestashopApiRequest(stockEndpoint, 'GET');
+      
+      // Extract stock_available ID from the response
+      let stockAvailableId = null;
+      if (stockData.stock_availables) {
+        const stocks = Array.isArray(stockData.stock_availables) 
+          ? stockData.stock_availables 
+          : [stockData.stock_availables];
+        
+        if (stocks.length > 0) {
+          stockAvailableId = stocks[0].stock_available?.id || stocks[0].id;
+        }
+      } else if (stockData.stock_available) {
+        stockAvailableId = stockData.stock_available.id;
+      }
+      
+      // If we got an ID but no quantity, fetch the full stock_available record
+      if (stockAvailableId) {
+        try {
+          const fullStockData = await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'GET');
+          
+          if (fullStockData.stock_available) {
+            const quantity = fullStockData.stock_available.quantity;
+            if (quantity !== undefined && quantity !== null) {
+              stock = parseInt(quantity) || 0;
+            }
+          } else if (fullStockData.quantity !== undefined && fullStockData.quantity !== null) {
+            stock = parseInt(fullStockData.quantity) || 0;
+          }
+        } catch (fetchError) {
+          // Try to get quantity from the initial response if available
+          if (stockData.stock_availables) {
+            const stocks = Array.isArray(stockData.stock_availables) 
+              ? stockData.stock_availables 
+              : [stockData.stock_availables];
+            if (stocks.length > 0) {
+              const stockEntry = stocks[0].stock_available || stocks[0];
+              const quantity = stockEntry.quantity;
+              if (quantity !== undefined && quantity !== null) {
+                stock = parseInt(quantity) || 0;
+              }
+            }
+          }
+        }
+      }
+    } catch (stockError) {
+      console.warn(`Failed to fetch stock for product ${productId}:`, stockError.message);
+      // Continue without stock if fetch fails
+    }
+    
     res.json({
       success: true,
-      product: product
+      product: product,
+      stock: stock
     });
   } catch (error) {
     res.status(error.response?.status || 500).json({
@@ -3396,8 +3450,8 @@ app.put('/api/prestashop/products/:productId/stock', async (req, res) => {
       });
     }
 
-    // Get stock available ID
-    const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${productId}]`, 'GET');
+    // Get stock available ID (filter by id_product_attribute=0 to get base product stock)
+    const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${productId}]&filter[id_product_attribute]=[0]`, 'GET');
     let stockAvailableId = null;
     
     if (stockData.stock_availables) {
@@ -3472,8 +3526,8 @@ app.post('/api/prestashop/sync/stock', async (req, res) => {
       });
     }
 
-    // Update stock in PrestaShop
-    const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${mapping.prestashopProductId}]`, 'GET');
+    // Update stock in PrestaShop (filter by id_product_attribute=0 to get base product stock)
+    const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${mapping.prestashopProductId}]&filter[id_product_attribute]=[0]`, 'GET');
     let stockAvailableId = null;
     
     if (stockData.stock_availables) {
@@ -3935,16 +3989,44 @@ async function exportProductsToCsv() {
       }
 
       // Get stock quantity
+      // Filter endpoint only returns ID, so we need to fetch full record by ID
       let quantity = '0';
       try {
         const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${fullProduct.id}]&filter[id_product_attribute]=[0]`, 'GET');
+        
+        // Extract stock_available ID from the filter response
+        let stockAvailableId = null;
         if (stockData.stock_availables) {
           const stocks = Array.isArray(stockData.stock_availables) 
             ? stockData.stock_availables 
             : [stockData.stock_availables];
           if (stocks.length > 0) {
-            const stock = stocks[0].stock_available || stocks[0];
-            quantity = stock.quantity || '0';
+            stockAvailableId = stocks[0].stock_available?.id || stocks[0].id;
+          }
+        } else if (stockData.stock_available) {
+          stockAvailableId = stockData.stock_available.id;
+        }
+        
+        // Fetch full stock_available record to get quantity
+        if (stockAvailableId) {
+          try {
+            const fullStockData = await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'GET');
+            if (fullStockData.stock_available) {
+              quantity = fullStockData.stock_available.quantity || '0';
+            } else if (fullStockData.quantity !== undefined && fullStockData.quantity !== null) {
+              quantity = String(fullStockData.quantity);
+            }
+          } catch (fetchError) {
+            // Fallback: try to get quantity from initial response if available
+            if (stockData.stock_availables) {
+              const stocks = Array.isArray(stockData.stock_availables) 
+                ? stockData.stock_availables 
+                : [stockData.stock_availables];
+              if (stocks.length > 0) {
+                const stock = stocks[0].stock_available || stocks[0];
+                quantity = stock.quantity || '0';
+              }
+            }
           }
         }
       } catch (e) {
@@ -4481,62 +4563,74 @@ async function syncStockFromAllegroToPrestashop() {
           }
 
           // Get current stock from PrestaShop
-          // Improved retrieval to handle all PrestaShop API response formats
+          // Filter endpoint only returns ID, so we need to fetch full record by ID
           let prestashopStock = 0;
           try {
-            const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]`, 'GET');
+            const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]&filter[id_product_attribute]=[0]`, 'GET');
             
-            // Handle various PrestaShop API response formats
-            let stockEntry = null;
-            
-            // Format 1: { stock_availables: { stock_available: {...} } }
-            if (stockData.stock_availables?.stock_available) {
-              stockEntry = stockData.stock_availables.stock_available;
-            }
-            // Format 2: { stock_availables: [{ stock_available: {...} }] } or { stock_availables: [{...}] }
-            else if (Array.isArray(stockData.stock_availables) && stockData.stock_availables.length > 0) {
-              stockEntry = stockData.stock_availables[0].stock_available || stockData.stock_availables[0];
-            }
-            // Format 3: { stock_availables: { stock_available: [{...}] } }
-            else if (stockData.stock_availables && typeof stockData.stock_availables === 'object') {
-              const stocks = stockData.stock_availables;
-              if (Array.isArray(stocks)) {
-                stockEntry = stocks[0]?.stock_available || stocks[0];
-              } else if (stocks.stock_available) {
-                stockEntry = Array.isArray(stocks.stock_available) ? stocks.stock_available[0] : stocks.stock_available;
-              }
-            }
-            // Format 4: { stock_available: {...} }
-            else if (stockData.stock_available) {
-              stockEntry = stockData.stock_available;
-            }
-            
-            // Extract quantity from stock entry
-            if (stockEntry) {
-              // Try multiple possible field names for quantity
-              const quantity = stockEntry.quantity !== undefined ? stockEntry.quantity :
-                              stockEntry.qty !== undefined ? stockEntry.qty :
-                              stockEntry.available_quantity !== undefined ? stockEntry.available_quantity :
-                              null;
+            // Extract stock_available ID from the filter response
+            let stockAvailableId = null;
+            if (stockData.stock_availables) {
+              const stocks = Array.isArray(stockData.stock_availables) 
+                ? stockData.stock_availables 
+                : [stockData.stock_availables];
               
-              if (quantity !== null && quantity !== undefined) {
-                prestashopStock = parseInt(quantity);
-                // Validate parsed value
-                if (isNaN(prestashopStock)) {
-                  console.warn(`Invalid stock quantity format for product ${prestashopProductId}: "${quantity}". Defaulting to 0.`);
+              if (stocks.length > 0) {
+                stockAvailableId = stocks[0].stock_available?.id || stocks[0].id;
+              }
+            } else if (stockData.stock_available) {
+              stockAvailableId = stockData.stock_available.id;
+            }
+            
+            // Fetch full stock_available record to get quantity
+            if (stockAvailableId) {
+              try {
+                const fullStockData = await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'GET');
+                
+                if (fullStockData.stock_available) {
+                  const quantity = fullStockData.stock_available.quantity;
+                  if (quantity !== undefined && quantity !== null) {
+                    prestashopStock = parseInt(quantity);
+                    // Validate parsed value
+                    if (isNaN(prestashopStock)) {
+                      console.warn(`Invalid stock quantity format for product ${prestashopProductId}: "${quantity}". Defaulting to 0.`);
+                      prestashopStock = 0;
+                    }
+                  } else {
+                    console.warn(`No quantity field found in full stock data for product ${prestashopProductId}`);
+                    prestashopStock = 0;
+                  }
+                } else if (fullStockData.quantity !== undefined && fullStockData.quantity !== null) {
+                  prestashopStock = parseInt(fullStockData.quantity) || 0;
+                } else {
+                  console.warn(`No quantity field found in full stock data for product ${prestashopProductId}. Response:`, JSON.stringify(fullStockData).substring(0, 200));
                   prestashopStock = 0;
                 }
-              } else {
-                console.warn(`No quantity field found in stock data for product ${prestashopProductId}. Stock entry:`, JSON.stringify(stockEntry).substring(0, 200));
-                prestashopStock = 0;
+              } catch (fetchError) {
+                console.warn(`Failed to fetch full stock_available details for product ${prestashopProductId}:`, fetchError.message);
+                // Try to get quantity from the initial response if available (fallback)
+                if (stockData.stock_availables) {
+                  const stocks = Array.isArray(stockData.stock_availables) 
+                    ? stockData.stock_availables 
+                    : [stockData.stock_availables];
+                  if (stocks.length > 0) {
+                    const stock = stocks[0].stock_available || stocks[0];
+                    const quantity = stock.quantity;
+                    if (quantity !== undefined && quantity !== null) {
+                      prestashopStock = parseInt(quantity) || 0;
+                    }
+                  }
+                }
               }
             } else {
-              // No stock entry found - log for debugging
-              console.warn(`No stock entry found for product ${prestashopProductId}. Response structure:`, JSON.stringify(Object.keys(stockData || {})).substring(0, 200));
+              console.warn(`No stock_available ID found for product ${prestashopProductId}. Response:`, JSON.stringify(stockData).substring(0, 300));
               prestashopStock = 0;
             }
           } catch (error) {
             console.error(`Error fetching PrestaShop stock for product ${prestashopProductId}:`, error.message);
+            if (error.response?.data) {
+              console.error(`PrestaShop API error details:`, JSON.stringify(error.response.data).substring(0, 300));
+            }
             addSyncLog({
               status: 'error',
               message: `Failed to fetch stock from PrestaShop: ${error.message}`,
@@ -4562,8 +4656,8 @@ async function syncStockFromAllegroToPrestashop() {
           if (allegroStockNum !== prestashopStockNum) {
             console.log(`Stock differs: Allegro=${allegroStockNum}, PrestaShop=${prestashopStockNum}. Syncing from Allegro to PrestaShop...`);
             try {
-              // Get stock available ID
-              const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]`, 'GET');
+              // Get stock available ID (filter by id_product_attribute=0 to get base product stock)
+              const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]&filter[id_product_attribute]=[0]`, 'GET');
               let stockAvailableId = null;
               
               if (stockData.stock_availables) {
@@ -4608,8 +4702,8 @@ async function syncStockFromAllegroToPrestashop() {
                     // Wait a moment for PrestaShop to process
                     await new Promise(resolve => setTimeout(resolve, 500));
                     
-                    // Check again if stock entry was created
-                    const stockDataRetry = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]`, 'GET');
+                    // Check again if stock entry was created (filter by id_product_attribute=0 to get base product stock)
+                    const stockDataRetry = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]&filter[id_product_attribute]=[0]`, 'GET');
                     let stockAvailableIdRetry = null;
                     
                     if (stockDataRetry.stock_availables) {

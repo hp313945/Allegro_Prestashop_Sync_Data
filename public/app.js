@@ -5052,12 +5052,14 @@ function displaySyncLogs(logs) {
         if (productCheckingList) productCheckingList.style.display = 'none';
     }
     
-    // Display summary logs
-    const sortedLogs = [...summaryLogs].sort((a, b) => {
-        const dateA = new Date(a.timestamp);
-        const dateB = new Date(b.timestamp);
-        return dateB - dateA; // Newest first
-    });
+    // Display summary logs (excluding info status logs)
+    const sortedLogs = [...summaryLogs]
+        .filter(log => (log.status || 'info') !== 'info') // Filter out info logs
+        .sort((a, b) => {
+            const dateA = new Date(a.timestamp);
+            const dateB = new Date(b.timestamp);
+            return dateB - dateA; // Newest first
+        });
     
     syncLogList.innerHTML = sortedLogs.map(log => {
         const timestamp = new Date(log.timestamp).toLocaleString();
