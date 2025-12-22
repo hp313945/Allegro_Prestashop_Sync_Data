@@ -240,24 +240,35 @@
                             <div class="sync-log-info-header">
                                 <div class="sync-log-info-content">
                                     <p class="info-text">
-                                        <strong>Automatic Stock Sync:</strong> Stock is automatically synced from Allegro to PrestaShop every 5 minutes.
-                                        Only products that exist in PrestaShop are synced. Stock changes in PrestaShop do not affect Allegro stock.
+                                        <strong>Automatic Stock Sync:</strong> Stock is automatically synced from Allegro to PrestaShop.
+                                        <br><strong>Sync Schedule:</strong> Runs once immediately after server starts (10 seconds delay), then automatically every 5 minutes.
+                                        <br><strong>Sync Method:</strong> Only products that exist in PrestaShop are checked and synced. Stock changes in PrestaShop do not affect Allegro stock.
                                     </p>
                                     <div class="sync-status" id="syncStatus">
-                                        <span class="sync-status-label">Last Sync:</span>
-                                        <span id="lastSyncTime" class="sync-status-value">Never</span>
-                                        <span class="sync-status-label" style="margin-left: 20px;">Next Sync:</span>
-                                        <span id="nextSyncTime" class="sync-status-value">-</span>
+                                        <div class="sync-status-row">
+                                            <span class="sync-status-label">Last Sync:</span>
+                                            <span id="lastSyncTime" class="sync-status-value">Never</span>
+                                            <span id="timeSinceLastSync" class="sync-time-elapsed"></span>
+                                        </div>
+                                        <div class="sync-status-row">
+                                            <span class="sync-status-label">Next Sync:</span>
+                                            <span id="nextSyncTime" class="sync-status-value">-</span>
+                                            <span id="timeUntilNextSync" class="sync-time-countdown"></span>
+                                        </div>
                                     </div>
-                                </div>
-                                <div class="section-actions">
-                                    <button id="refreshSyncLogBtn" class="btn btn-primary btn-small">Refresh</button>
-                                    <button id="clearSyncLogBtn" class="btn btn-secondary btn-small">Clear Log</button>
-                                    <button id="triggerSyncBtn" class="btn btn-success btn-small">Sync Now</button>
                                 </div>
                             </div>
                         </div>
                         <div id="syncLogContainer" class="sync-log-container">
+                            <!-- Product Checking List -->
+                            <div id="productCheckingList" class="product-checking-list" style="display: none;">
+                                <div class="checking-list-header">
+                                    <h3>Product Checking Status</h3>
+                                    <div id="checkingProgress" class="checking-progress"></div>
+                                </div>
+                                <div id="productCheckingItems" class="product-checking-items"></div>
+                            </div>
+                            <!-- Sync Logs -->
                             <div id="syncLogList" class="sync-log-list"></div>
                         </div>
                     </div>

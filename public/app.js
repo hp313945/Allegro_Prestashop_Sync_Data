@@ -546,19 +546,7 @@ function setupEventListeners() {
         exportProductsCsvBtn.addEventListener('click', exportProductsCsv);
     }
     
-    // Sync Stock Log event listeners
-    const refreshSyncLogBtn = document.getElementById('refreshSyncLogBtn');
-    if (refreshSyncLogBtn) {
-        refreshSyncLogBtn.addEventListener('click', loadSyncLogs);
-    }
-    const clearSyncLogBtn = document.getElementById('clearSyncLogBtn');
-    if (clearSyncLogBtn) {
-        clearSyncLogBtn.addEventListener('click', clearSyncLogs);
-    }
-    const triggerSyncBtn = document.getElementById('triggerSyncBtn');
-    if (triggerSyncBtn) {
-        triggerSyncBtn.addEventListener('click', triggerStockSync);
-    }
+    // Sync Stock Log event listeners (removed - logs auto-clear on sync start)
     
     // Load PrestaShop config on startup
     loadPrestashopConfig();
@@ -4217,8 +4205,14 @@ async function loadCategoriesFromOffers() {
             // Filter by ACTIVE status to match Allegro website (which shows ACTIVE offers by default)
             const response = await fetch(`${API_BASE}/api/offers?offset=${offset}&limit=${limit}&status=ACTIVE`);
             
-            if (!response.ok && response.status === 401) {
-                throw new Error('Invalid credentials. Please check your Client ID and Client Secret.');
+            if (!response.ok) {
+                if (response.status === 401) {
+                    throw new Error('Invalid credentials. Please check your Client ID and Client Secret.');
+                } else {
+                    const errorText = await response.text();
+                    console.error(`Failed to fetch offers: ${response.status} ${response.statusText}`, errorText);
+                    throw new Error(`Failed to fetch offers: ${response.status} ${response.statusText}. Please check your OAuth connection and try again.`);
+                }
             }
             
             const result = await response.json();
@@ -4240,7 +4234,10 @@ async function loadCategoriesFromOffers() {
                     offset += limit;
                 }
             } else {
-                hasMore = false;
+                // API returned an error
+                const errorMsg = result.error || 'Unknown error';
+                console.error('API returned error:', errorMsg);
+                throw new Error(`Failed to load offers: ${errorMsg}`);
             }
         }
         
@@ -4250,6 +4247,12 @@ async function loadCategoriesFromOffers() {
         });
         
         console.log(`Loaded ${allOffers.length} offers from Allegro (${activeOffersForCount.length} ACTIVE) for category extraction (API totalCount: ${totalCountFromAPI || 'N/A'})`);
+        
+        // Check if we have any offers at all
+        if (allOffers.length === 0) {
+            categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #666;">No offers found. Please click "Load My Offers" first to load your Allegro offers, then categories will be displayed.</p>';
+            return;
+        }
         
         // Store total count of ACTIVE offers for accurate "All Categories" display
         if (totalCountFromAPI !== null && totalCountFromAPI > 0) {
@@ -4264,6 +4267,9 @@ async function loadCategoriesFromOffers() {
         const categoriesFromOffers = new Map();
         
         // Use the already filtered active offers for counting
+        let offersWithCategories = 0;
+        let offersWithoutCategories = 0;
+        
         activeOffersForCount.forEach(offer => {
             let offerCategoryId = null;
             let offerCategoryName = null;
@@ -4289,6 +4295,7 @@ async function loadCategoriesFromOffers() {
             }
             
             if (offerCategoryId) {
+                offersWithCategories++;
                 const catId = String(offerCategoryId);
                 if (!categoriesFromOffers.has(catId)) {
                     categoriesFromOffers.set(catId, {
@@ -4298,8 +4305,12 @@ async function loadCategoriesFromOffers() {
                     });
                 }
                 categoriesFromOffers.get(catId).count++;
+            } else {
+                offersWithoutCategories++;
             }
         });
+        
+        console.log(`Category extraction: ${offersWithCategories} offers with categories, ${offersWithoutCategories} offers without categories`);
         
         // Convert map to array and fetch category names if needed
         const categoriesArray = Array.from(categoriesFromOffers.values());
@@ -4845,7 +4856,7 @@ function setupTabNavigation() {
                 // Load sync logs when sync-log tab is opened
                 if (targetTab === 'sync-log') {
                     loadSyncLogs();
-                    // Auto-refresh sync logs every 10 seconds when tab is active
+                    // Auto-refresh sync logs every 2 seconds when tab is active for real-time updates
                     if (window.syncLogInterval) {
                         clearInterval(window.syncLogInterval);
                     }
@@ -4853,12 +4864,20 @@ function setupTabNavigation() {
                         if (targetContent.classList.contains('active')) {
                             loadSyncLogs();
                         }
-                    }, 10000);
+                    }, 2000); // Poll every 2 seconds for real-time updates
+                    
+                    // Start real-time timer updates
+                    startSyncTimer();
                 } else {
                     // Clear interval when switching away from sync-log tab
                     if (window.syncLogInterval) {
                         clearInterval(window.syncLogInterval);
                         window.syncLogInterval = null;
+                    }
+                    // Stop timer when switching away
+                    if (syncTimerInterval) {
+                        clearInterval(syncTimerInterval);
+                        syncTimerInterval = null;
                     }
                 }
             }
@@ -4932,15 +4951,109 @@ async function loadSyncLogs() {
 
 function displaySyncLogs(logs) {
     const syncLogList = document.getElementById('syncLogList');
+    const productCheckingList = document.getElementById('productCheckingList');
+    const productCheckingItems = document.getElementById('productCheckingItems');
+    const checkingProgress = document.getElementById('checkingProgress');
+    
     if (!syncLogList) return;
     
     if (!logs || logs.length === 0) {
         syncLogList.innerHTML = '<div class="sync-log-empty">No sync logs yet. Stock sync will run automatically every 5 minutes.</div>';
+        if (productCheckingList) productCheckingList.style.display = 'none';
         return;
     }
     
-    // Sort by timestamp (newest first) to ensure proper ordering
-    const sortedLogs = [...logs].sort((a, b) => {
+    // Separate product checking logs from summary/info logs
+    const productLogs = logs.filter(log => log.productName && log.status !== 'info');
+    const summaryLogs = logs.filter(log => !log.productName || log.status === 'info');
+    
+    // Display product checking list if there are product logs
+    if (productLogs.length > 0 && productCheckingList && productCheckingItems) {
+        productCheckingList.style.display = 'block';
+        
+        // Group products by name to show latest status
+        const productStatusMap = new Map();
+        productLogs.forEach(log => {
+            const key = log.prestashopProductId || log.offerId || log.productName;
+            if (!productStatusMap.has(key) || new Date(log.timestamp) > new Date(productStatusMap.get(key).timestamp)) {
+                productStatusMap.set(key, log);
+            }
+        });
+        
+        const productArray = Array.from(productStatusMap.values());
+        const checkingCount = productArray.filter(p => p.status === 'checking').length;
+        const syncedCount = productArray.filter(p => p.status === 'success').length;
+        const unchangedCount = productArray.filter(p => p.status === 'unchanged').length;
+        const errorCount = productArray.filter(p => p.status === 'error').length;
+        const skippedCount = productArray.filter(p => p.status === 'warning' || p.status === 'skipped').length;
+        const totalCount = productArray.length;
+        
+        // Update progress
+        if (checkingProgress) {
+            const completed = totalCount - checkingCount;
+            checkingProgress.textContent = `Progress: ${completed}/${totalCount} checked (${syncedCount} synced, ${unchangedCount} unchanged, ${skippedCount} skipped, ${errorCount} errors)`;
+        }
+        
+        // Sort by timestamp (oldest first for checking list to show progress)
+        productArray.sort((a, b) => {
+            const dateA = new Date(a.timestamp);
+            const dateB = new Date(b.timestamp);
+            return dateA - dateB; // Oldest first
+        });
+        
+        productCheckingItems.innerHTML = productArray.map(log => {
+            const statusClass = log.status || 'info';
+            const statusIcon = getStatusIcon(statusClass);
+            const statusText = getStatusText(statusClass);
+            
+            let stockInfo = '';
+            if (log.stockChange && log.stockChange.from !== null && log.stockChange.to !== null) {
+                stockInfo = `<span class="product-check-stock">Stock: ${log.stockChange.from} → ${log.stockChange.to}</span>`;
+            }
+            
+            let idsInfo = '';
+            if (log.offerId || log.prestashopProductId) {
+                const parts = [];
+                if (log.offerId) parts.push(`Allegro: ${log.offerId}`);
+                if (log.prestashopProductId) parts.push(`PrestaShop: ${log.prestashopProductId}`);
+                idsInfo = `<span>${parts.join(' | ')}</span>`;
+            }
+            
+            let productDisplayName = '';
+            if (log.productName && log.productName.trim() !== '' && !log.productName.startsWith('Offer ')) {
+                productDisplayName = escapeHtml(log.productName);
+            } else if (log.offerId) {
+                productDisplayName = `Offer ${escapeHtml(log.offerId)}`;
+            } else if (log.prestashopProductId) {
+                productDisplayName = `Product ID ${escapeHtml(log.prestashopProductId)}`;
+            } else {
+                productDisplayName = 'Unknown Product';
+            }
+            
+            if (log.categoryName) {
+                productDisplayName += `<span style="font-weight: 400; color: #666; font-size: 0.9em;"> • ${escapeHtml(log.categoryName)}</span>`;
+            }
+            
+            return `
+                <div class="product-checking-item ${statusClass}">
+                    <div class="product-check-status ${statusClass}">${statusIcon}</div>
+                    <div class="product-check-info">
+                        <div class="product-check-name">${productDisplayName}</div>
+                        <div class="product-check-details">
+                            <span>${statusText}</span>
+                            ${stockInfo}
+                            ${idsInfo}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } else {
+        if (productCheckingList) productCheckingList.style.display = 'none';
+    }
+    
+    // Display summary logs
+    const sortedLogs = [...summaryLogs].sort((a, b) => {
         const dateA = new Date(a.timestamp);
         const dateB = new Date(b.timestamp);
         return dateB - dateA; // Newest first
@@ -4959,9 +5072,30 @@ function displaySyncLogs(logs) {
             `;
         }
         
+        // Display product name prominently - use product name if available, otherwise show offer ID
         let productInfo = '';
-        if (log.productName) {
-            productInfo = `<div class="sync-log-product">${escapeHtml(log.productName)}</div>`;
+        let displayName = '';
+        let categoryInfo = '';
+        
+        if (log.categoryName) {
+            categoryInfo = `<span style="font-weight: 400; color: #666; font-size: 0.9em;"> • ${escapeHtml(log.categoryName)}</span>`;
+        }
+        
+        if (log.productName && log.productName.trim() !== '' && !log.productName.startsWith('Offer ')) {
+            // Product name is available and not a fallback "Offer {ID}" format
+            displayName = escapeHtml(log.productName);
+        } else if (log.offerId) {
+            // Fallback to showing offer ID if no proper product name
+            displayName = `Offer ${escapeHtml(log.offerId)}`;
+        } else if (log.prestashopProductId) {
+            // Last resort: show PrestaShop ID
+            displayName = `Product ID ${escapeHtml(log.prestashopProductId)}`;
+        } else {
+            displayName = 'Unknown Product';
+        }
+        
+        if (displayName) {
+            productInfo = `<div class="sync-log-product" style="font-weight: 600; margin-bottom: 4px;">${displayName}${categoryInfo}</div>`;
         }
         
         let detailsHtml = '';
@@ -4970,6 +5104,11 @@ function displaySyncLogs(logs) {
             if (log.offerId) parts.push(`Allegro: ${log.offerId}`);
             if (log.prestashopProductId) parts.push(`PrestaShop: ${log.prestashopProductId}`);
             detailsHtml = `<div style="font-size: 0.85em; color: #999; margin-top: 4px;">${parts.join(' | ')}</div>`;
+        }
+        
+        // Skip "checking" status logs in the main log list (they're shown in checking list)
+        if (statusClass === 'checking') {
+            return '';
         }
         
         return `
@@ -4986,10 +5125,42 @@ function displaySyncLogs(logs) {
                 </div>
             </div>
         `;
-    }).join('');
+    }).filter(html => html !== '').join('');
 }
 
+function getStatusIcon(status) {
+    switch(status) {
+        case 'checking': return '⟳';
+        case 'success': return '✓';
+        case 'unchanged': return '○';
+        case 'error': return '✗';
+        case 'warning':
+        case 'skipped': return '⚠';
+        default: return '•';
+    }
+}
+
+function getStatusText(status) {
+    switch(status) {
+        case 'checking': return 'Checking...';
+        case 'success': return 'Synced';
+        case 'unchanged': return 'Unchanged';
+        case 'error': return 'Error';
+        case 'warning':
+        case 'skipped': return 'Skipped';
+        default: return 'Info';
+    }
+}
+
+// Store sync times for real-time updates
+let currentLastSyncTime = null;
+let currentNextSyncTime = null;
+let syncTimerInterval = null;
+
 function updateSyncStatus(lastSyncTime, nextSyncTime) {
+    currentLastSyncTime = lastSyncTime;
+    currentNextSyncTime = nextSyncTime;
+    
     const lastSyncTimeEl = document.getElementById('lastSyncTime');
     const nextSyncTimeEl = document.getElementById('nextSyncTime');
     
@@ -5010,61 +5181,86 @@ function updateSyncStatus(lastSyncTime, nextSyncTime) {
             nextSyncTimeEl.textContent = 'Calculating...';
         }
     }
+    
+    // Start real-time timer updates
+    startSyncTimer();
 }
 
-async function clearSyncLogs() {
-    if (!confirm('Are you sure you want to clear all sync logs?')) {
-        return;
+function startSyncTimer() {
+    // Clear existing timer if any
+    if (syncTimerInterval) {
+        clearInterval(syncTimerInterval);
     }
     
-    try {
-        const response = await fetch('/api/sync/logs/clear', {
-            method: 'POST'
-        });
-        const data = await response.json();
+    // Update immediately
+    updateSyncTimers();
+    
+    // Update every second
+    syncTimerInterval = setInterval(() => {
+        updateSyncTimers();
+    }, 1000);
+}
+
+function updateSyncTimers() {
+    const timeSinceEl = document.getElementById('timeSinceLastSync');
+    const timeUntilEl = document.getElementById('timeUntilNextSync');
+    
+    // Update "time since last sync"
+    if (timeSinceEl && currentLastSyncTime) {
+        const lastSync = new Date(currentLastSyncTime);
+        const now = new Date();
+        const elapsed = Math.floor((now - lastSync) / 1000); // seconds
+        timeSinceEl.textContent = `(${formatTimeElapsed(elapsed)} ago)`;
+        timeSinceEl.style.color = '#666';
+    } else if (timeSinceEl) {
+        timeSinceEl.textContent = '';
+    }
+    
+    // Update "time until next sync"
+    if (timeUntilEl && currentNextSyncTime) {
+        const nextSync = new Date(currentNextSyncTime);
+        const now = new Date();
+        const remaining = Math.floor((nextSync - now) / 1000); // seconds
         
-        if (data.success) {
-            loadSyncLogs();
-            showToast('Sync logs cleared', 'success');
+        if (remaining > 0) {
+            timeUntilEl.textContent = `(in ${formatTimeRemaining(remaining)})`;
+            timeUntilEl.style.color = '#1a73e8';
         } else {
-            showToast('Failed to clear sync logs: ' + data.error, 'error');
+            timeUntilEl.textContent = '(sync running...)';
+            timeUntilEl.style.color = '#34a853';
         }
-    } catch (error) {
-        console.error('Error clearing sync logs:', error);
-        showToast('Error clearing sync logs', 'error');
+    } else if (timeUntilEl) {
+        timeUntilEl.textContent = '';
     }
 }
 
-async function triggerStockSync() {
-    const triggerSyncBtn = document.getElementById('triggerSyncBtn');
-    if (triggerSyncBtn) {
-        triggerSyncBtn.disabled = true;
-        triggerSyncBtn.textContent = 'Syncing...';
-    }
-    
-    try {
-        const response = await fetch('/api/sync/trigger', {
-            method: 'POST'
-        });
-        const data = await response.json();
-        
-        if (data.success) {
-            showToast('Stock sync triggered. Check logs for progress.', 'success');
-            // Refresh logs after a short delay
-            setTimeout(() => {
-                loadSyncLogs();
-            }, 2000);
-        } else {
-            showToast('Failed to trigger sync: ' + data.error, 'error');
-        }
-    } catch (error) {
-        console.error('Error triggering sync:', error);
-        showToast('Error triggering sync', 'error');
-    } finally {
-        if (triggerSyncBtn) {
-            triggerSyncBtn.disabled = false;
-            triggerSyncBtn.textContent = 'Sync Now';
-        }
+function formatTimeElapsed(seconds) {
+    if (seconds < 60) {
+        return `${seconds}s`;
+    } else if (seconds < 3600) {
+        const minutes = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${minutes}m ${secs}s`;
+    } else {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        return `${hours}h ${minutes}m`;
     }
 }
+
+function formatTimeRemaining(seconds) {
+    if (seconds < 60) {
+        return `${seconds}s`;
+    } else if (seconds < 3600) {
+        const minutes = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${minutes}m ${secs}s`;
+    } else {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        return `${hours}h ${minutes}m`;
+    }
+}
+
+
 

@@ -122,7 +122,7 @@ let prestashopCredentials = {
 // Store product mappings (Allegro offer ID → PrestaShop product ID)
 let productMappings = {};
 
-// Store sync logs
+// Store sync logs in memory only (cleared when sync starts - only current session logs)
 let syncLogs = [];
 const MAX_SYNC_LOGS = 1000; // Keep last 1000 log entries
 
@@ -295,39 +295,124 @@ function loadProductMappings() {
   }
 }
 
-/**
- * Save sync logs to file (persistent storage)
- */
-function saveSyncLogs() {
-  try {
-    const logData = {
-      logs: syncLogs,
-      savedAt: new Date().toISOString()
-    };
-    fs.writeFileSync(SYNC_LOG_FILE, JSON.stringify(logData, null, 2), 'utf8');
-  } catch (error) {
-    console.error('Error saving sync logs:', error.message);
-  }
-}
+// Sync logs are stored in memory only - no file persistence
+// Logs are cleared when sync starts to show only current session logs
 
 /**
- * Load sync logs from file (on server startup)
+ * Extract product name from PrestaShop product data
+ * PrestaShop stores names as: { name: { language: [{ id: '1', value: 'Name' }] } } or { name: [{ id: '1', value: 'Name' }] }
  */
-function loadSyncLogs() {
-  try {
-    if (fs.existsSync(SYNC_LOG_FILE)) {
-      const logData = JSON.parse(fs.readFileSync(SYNC_LOG_FILE, 'utf8'));
-      if (logData.logs && Array.isArray(logData.logs)) {
-        syncLogs = logData.logs;
-        // Enforce MAX_SYNC_LOGS limit
-        if (syncLogs.length > MAX_SYNC_LOGS) {
-          syncLogs = syncLogs.slice(-MAX_SYNC_LOGS);
+function extractProductNameFromPrestashop(productData) {
+  if (!productData) return null;
+  
+  let nameArray = null;
+  
+  // Handle different PrestaShop response structures
+  if (productData.name) {
+    // Case 1: Direct string
+    if (typeof productData.name === 'string') {
+      return productData.name;
+    }
+    
+    // Case 2: Array format [{ id: '1', value: 'Name' }, { id: '2', value: 'Name' }]
+    if (Array.isArray(productData.name)) {
+      nameArray = productData.name;
+    } 
+    // Case 3: Object with language property { language: [{ id: '1', value: 'Name' }] }
+    else if (productData.name.language) {
+      nameArray = Array.isArray(productData.name.language) 
+        ? productData.name.language 
+        : [productData.name.language];
+    } 
+    // Case 4: Direct value property { value: 'Name' }
+    else if (productData.name.value) {
+      return productData.name.value;
+    }
+    // Case 5: Object with nested structure
+    else if (typeof productData.name === 'object') {
+      // Try to find any value property in the object
+      for (const key in productData.name) {
+        if (productData.name[key] && typeof productData.name[key] === 'object') {
+          if (productData.name[key].value) {
+            return productData.name[key].value;
+          }
         }
       }
     }
+  }
+  
+  // Extract first available name value from array
+  if (nameArray && nameArray.length > 0) {
+    const firstLang = nameArray[0];
+    if (firstLang) {
+      // Try value property first
+      if (firstLang.value) {
+        return firstLang.value;
+      }
+      // If it's a string directly
+      if (typeof firstLang === 'string') {
+        return firstLang;
+      }
+      // Try to find value in nested structure
+      if (typeof firstLang === 'object') {
+        for (const key in firstLang) {
+          if (key === 'value' || key === 'name') {
+            return firstLang[key];
+          }
+        }
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Extract category name from PrestaShop product data
+ * Returns category name string or null if not found
+ */
+async function extractCategoryNameFromPrestashop(productData) {
+  if (!productData) return null;
+  
+  try {
+    // First try to get category ID from id_category_default
+    let categoryId = productData.id_category_default;
+    
+    // If not available, try to get from associations
+    if (!categoryId && productData.associations && productData.associations.categories && productData.associations.categories.category) {
+      const categories = Array.isArray(productData.associations.categories.category)
+        ? productData.associations.categories.category
+        : [productData.associations.categories.category];
+      
+      if (categories.length > 0) {
+        categoryId = categories[0].id;
+      }
+    }
+    
+    if (!categoryId) {
+      return null;
+    }
+    
+    // Fetch category details to get the name
+    const categoryData = await prestashopApiRequest(`categories/${categoryId}`, 'GET');
+    const category = categoryData.category || categoryData;
+    
+    if (category && category.name) {
+      // Handle different name formats
+      if (Array.isArray(category.name)) {
+        return category.name[0]?.value || category.name[0] || null;
+      } else if (category.name.value) {
+        return category.name.value;
+      } else if (typeof category.name === 'string') {
+        return category.name;
+      }
+    }
+    
+    return null;
   } catch (error) {
-    console.error('Error loading sync logs:', error.message);
-    syncLogs = [];
+    // If category fetch fails, return null (non-blocking)
+    console.warn(`Failed to fetch category name for product:`, error.message);
+    return null;
   }
 }
 
@@ -340,7 +425,7 @@ function addSyncLog(entry) {
     timestamp: new Date().toISOString()
   };
   syncLogs.push(logEntry);
-  
+
   // Enforce MAX_SYNC_LOGS limit
   if (syncLogs.length > MAX_SYNC_LOGS) {
     syncLogs = syncLogs.slice(-MAX_SYNC_LOGS);
@@ -399,7 +484,7 @@ loadCredentials();
 loadTokens();
 loadPrestashopCredentials();
 loadProductMappings();
-loadSyncLogs();
+// Sync logs are stored in memory only - no file loading needed
 // Category cache loading is disabled – categories are always checked
 // directly against PrestaShop instead of using a persisted cache.
 loadCategoryCache();
@@ -3080,18 +3165,10 @@ app.post('/api/prestashop/products', async (req, res) => {
         });
         await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', stockXml);
       } else {
-        // Create new stock_available entry if it doesn't exist
-        const stockXml = buildStockAvailableXml({
-          quantity: quantityToSet,
-          id_product: prestashopProductId,
-          id_product_attribute: 0,
-          id_shop: 1,
-          id_shop_group: 0,
-          depends_on_stock: 0,
-          out_of_stock: finalStock === 0 ? 1 : 2 // Allow orders when stock is 0, deny when stock > 0
-        });
-        const stockResponse = await prestashopApiRequest('stock_availables', 'POST', stockXml);
-        console.log(`Created stock_available entry for product ${prestashopProductId}`);
+        // Stock entry doesn't exist - PrestaShop API doesn't allow POST for stock_availables
+        // Stock entries should be created automatically when products are created
+        // Log a warning and continue (product creation will handle stock)
+        console.warn(`Stock entry not found for product ${prestashopProductId}. Stock entries should be created automatically when products are created.`);
       }
     } catch (stockError) {
       console.error('Failed to update stock:', stockError.message);
@@ -3342,17 +3419,12 @@ app.put('/api/prestashop/products/:productId/stock', async (req, res) => {
       });
       await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', stockXml);
     } else {
-      // Create new stock_available entry if it doesn't exist
-      const stockXml = buildStockAvailableXml({
-        quantity: parseInt(quantity),
-        id_product: parseInt(productId),
-        id_product_attribute: 0,
-        id_shop: 1,
-        id_shop_group: 0,
-        depends_on_stock: 0,
-        out_of_stock: parseInt(quantity) === 0 ? 1 : 2
+      // Stock entry doesn't exist - PrestaShop API doesn't allow POST for stock_availables
+      // Stock entries should be created automatically when products are created
+      return res.status(404).json({
+        success: false,
+        error: 'Stock entry not found for this product. Stock entries should be created automatically when products are created in PrestaShop.'
       });
-      await prestashopApiRequest('stock_availables', 'POST', stockXml);
     }
 
     res.json({
@@ -4066,7 +4138,20 @@ app.get('/api/export/products.csv', async (req, res) => {
 
 /**
  * Sync stock from Allegro to PrestaShop
- * Only syncs products that exist in PrestaShop (from productMappings)
+ * 
+ * How it works:
+ * 1. Fetches all products from PrestaShop
+ * 2. For each product, reads the 'reference' field which contains the Allegro offer ID
+ * 3. Uses the Allegro offer ID to fetch current stock from Allegro API
+ * 4. Compares Allegro stock with PrestaShop stock
+ * 5. Updates PrestaShop stock if different
+ * 
+ * Requirements:
+ * - PrestaShop products must have the Allegro offer ID saved in the 'reference' field
+ * - This is automatically set when products are exported from Allegro to PrestaShop
+ * 
+ * Optimized: Only syncs products that exist in PrestaShop (by reference field)
+ * This is much more efficient than checking all Allegro offers
  */
 async function syncStockFromAllegroToPrestashop() {
   if (syncJobRunning) {
@@ -4110,23 +4195,83 @@ async function syncStockFromAllegroToPrestashop() {
   }
 
   syncJobRunning = true;
+  
+  // Clear old logs when sync starts - only show current session logs
+  syncLogs = [];
+  
   const syncStartTime = new Date().toISOString();
   let syncedCount = 0;
   let errorCount = 0;
   let skippedCount = 0;
+  let unchangedCount = 0;
   let consecutive403Errors = 0;
   const MAX_CONSECUTIVE_403 = 3; // Stop after 3 consecutive 403 errors
 
   try {
     console.log('Starting stock sync from Allegro to PrestaShop...');
+    console.log('Fetching PrestaShop products and syncing only existing products...');
     
-    // Get all product mappings (only products that exist in PrestaShop)
-    const offerIds = Object.keys(productMappings);
+    // Fetch all PrestaShop products (only products that exist in PrestaShop)
+    let allPrestashopProducts = [];
+    let offset = 0;
+    const limit = 1000; // Maximum allowed by API
+    let hasMore = true;
     
-    if (offerIds.length === 0) {
+    while (hasMore) {
+      try {
+        const data = await prestashopApiRequest(`products?limit=${limit}${offset > 0 ? `&offset=${offset}` : ''}`, 'GET');
+        
+        let products = [];
+        if (data.products) {
+          if (Array.isArray(data.products)) {
+            products = data.products.map(item => item.product || item);
+          } else if (data.products.product) {
+            products = Array.isArray(data.products.product) 
+              ? data.products.product 
+              : [data.products.product];
+          }
+        } else if (data.product) {
+          products = Array.isArray(data.product) ? data.product : [data.product];
+        }
+
+        if (products.length === 0) {
+          hasMore = false;
+        } else {
+          allPrestashopProducts = allPrestashopProducts.concat(products);
+          if (products.length < limit) {
+            hasMore = false;
+          } else {
+            offset += limit;
+          }
+        }
+      } catch (fetchError) {
+        console.error('Error fetching PrestaShop products:', fetchError.message);
+        // If we got some products, continue with what we have
+        if (allPrestashopProducts.length > 0) {
+          hasMore = false;
+        } else {
+          throw fetchError;
+        }
+      }
+    }
+    
+    console.log(`Found ${allPrestashopProducts.length} PrestaShop products to check for stock sync`);
+    
+    // Log start of sync with product count
+    addSyncLog({
+      status: 'info',
+      message: `Starting stock sync: Found ${allPrestashopProducts.length} products in PrestaShop. Checking stock for each product...`,
+      productName: null,
+      offerId: null,
+      prestashopProductId: null,
+      stockChange: null,
+      totalProductsChecked: allPrestashopProducts.length
+    });
+    
+    if (allPrestashopProducts.length === 0) {
       addSyncLog({
         status: 'info',
-        message: 'No products to sync. No products have been exported to PrestaShop yet.',
+        message: 'No products found in PrestaShop. Nothing to sync.',
         productName: null,
         offerId: null,
         prestashopProductId: null,
@@ -4138,7 +4283,7 @@ async function syncStockFromAllegroToPrestashop() {
 
     // Process in batches to avoid overwhelming the API
     const batchSize = 10;
-    for (let i = 0; i < offerIds.length; i += batchSize) {
+    for (let i = 0; i < allPrestashopProducts.length; i += batchSize) {
       // Stop if we've hit too many consecutive 403 errors
       if (consecutive403Errors >= MAX_CONSECUTIVE_403) {
         addSyncLog({
@@ -4152,17 +4297,115 @@ async function syncStockFromAllegroToPrestashop() {
         break;
       }
       
-      const batch = offerIds.slice(i, i + batchSize);
+      const batch = allPrestashopProducts.slice(i, i + batchSize);
       
-      await Promise.all(batch.map(async (offerId) => {
+      await Promise.all(batch.map(async (prestashopProduct) => {
+        // Initialize variables for error handling
+        let productName = null;
+        let categoryName = null;
+        let offerId = null;
+        
         try {
-          const mapping = productMappings[offerId];
-          if (!mapping || !mapping.prestashopProductId) {
+          const prestashopProductId = prestashopProduct.id?.toString();
+          if (!prestashopProductId) {
             skippedCount++;
             return;
           }
+          
+          // Fetch full product details - list endpoint only returns basic fields (doesn't include reference)
+          // We need to fetch individual product to get the reference field and name
+          let fullProduct = prestashopProduct;
+          try {
+            // Try with display parameter first to explicitly request needed fields
+            // Note: associations field is not available via display parameter, so we use id_category_default instead
+            let productData;
+            try {
+              productData = await prestashopApiRequest(`products/${prestashopProductId}?display=[id,name,reference,id_category_default]`, 'GET');
+            } catch (displayError) {
+              // If display parameter fails, try without it (some PrestaShop versions might not support it)
+              productData = await prestashopApiRequest(`products/${prestashopProductId}`, 'GET');
+            }
+            
+            // PrestaShop returns: { product: {...} } or { products: [{ product: {...} }] }
+            if (productData.product) {
+              fullProduct = productData.product;
+            } else if (productData.products && Array.isArray(productData.products) && productData.products.length > 0) {
+              fullProduct = productData.products[0].product || productData.products[0];
+            } else if (productData.id) {
+              fullProduct = productData;
+            }
+          } catch (fetchError) {
+            console.warn(`Failed to fetch full details for product ${prestashopProductId}, using basic data:`, fetchError.message);
+            // Continue with basic product data if full fetch fails
+          }
+          
+          // Get product name from PrestaShop using the same logic as CSV export
+          productName = extractProductNameFromPrestashop(fullProduct);
+          
+          // Debug logging if product name extraction fails (only log first few to avoid spam)
+          if (!productName && fullProduct && skippedCount < 3) {
+            console.log(`Product name extraction failed for product ${prestashopProductId}. Product data structure:`, JSON.stringify({
+              hasName: !!fullProduct.name,
+              nameType: typeof fullProduct.name,
+              nameIsArray: Array.isArray(fullProduct.name),
+              nameValue: fullProduct.name ? (typeof fullProduct.name === 'string' ? fullProduct.name.substring(0, 100) : JSON.stringify(fullProduct.name).substring(0, 200)) : null
+            }, null, 2));
+          }
+          
+          // Get category name from PrestaShop
+          categoryName = await extractCategoryNameFromPrestashop(fullProduct);
+          
+          // Get reference field (Allegro offer ID) from PrestaShop product
+          // Handle different PrestaShop API response structures
+          let reference = fullProduct.reference || fullProduct.product?.reference;
+          
+          if (!reference || (typeof reference === 'string' && reference.trim() === '')) {
+            // Product has no reference (Allegro offer ID) - skip it
+            skippedCount++;
+            addSyncLog({
+              status: 'skipped',
+              message: `Skipped: No Allegro offer ID (reference) found in PrestaShop product`,
+              productName: productName || `Product ID ${prestashopProductId}`,
+              categoryName: categoryName,
+              offerId: null,
+              prestashopProductId: prestashopProductId,
+              stockChange: null
+            });
+            return;
+          }
+          
+          // Convert reference to string and validate it's a valid Allegro offer ID (numeric)
+          const offerId = reference.toString().trim();
+          
+          // Validate offer ID format (Allegro offer IDs are numeric)
+          if (!/^\d+$/.test(offerId)) {
+            skippedCount++;
+            addSyncLog({
+              status: 'skipped',
+              message: `Skipped: Invalid Allegro offer ID format in reference field: "${offerId}"`,
+              productName: productName || `Product ID ${prestashopProductId}`,
+              offerId: offerId,
+              prestashopProductId: prestashopProductId,
+              stockChange: null
+            });
+            return;
+          }
+          
+          // Don't set fallback here - let the frontend handle it
+          // This way we can distinguish between actual product names and fallbacks
 
-          // Get current stock from Allegro
+          // Log that we're checking this product with the Allegro offer ID
+          addSyncLog({
+            status: 'checking',
+            message: `Checking stock for Allegro offer ID: ${offerId}`,
+            productName: productName,
+            categoryName: categoryName,
+            offerId: offerId,
+            prestashopProductId: prestashopProductId,
+            stockChange: null
+          });
+
+          // Get current stock from Allegro for this offer ID
           // Use the new /sale/product-offers/{offerId} endpoint (old /sale/offers/{offerId} was deprecated in 2024)
           // Try to get stock from the parts endpoint first (more efficient), fallback to full offer data
           let allegroStock = 0;
@@ -4198,10 +4441,11 @@ async function syncStockFromAllegroToPrestashop() {
             // Reset 403 counter on success
             consecutive403Errors = 0;
           } catch (error) {
-            console.error(`Error fetching Allegro offer ${offerId}:`, error.message);
+            console.error(`Error fetching Allegro offer ${offerId} (from PrestaShop product ${prestashopProductId} reference):`, error.message);
             
-            // Check if this is a 403 error or deprecated endpoint error
+            // Check if this is a 403 error, 404 (offer not found), or deprecated endpoint error
             const is403Error = error.response?.status === 403 || error.status === 403;
+            const is404Error = error.response?.status === 404 || error.status === 404;
             const isDeprecatedError = error.response?.data?.userMessage?.includes('no longer supported') || 
                                      error.response?.data?.errors?.some(e => e.userMessage?.includes('no longer supported'));
             
@@ -4213,7 +4457,9 @@ async function syncStockFromAllegroToPrestashop() {
             
             // Provide more specific error message
             let errorMessage = error.message;
-            if (isDeprecatedError) {
+            if (is404Error) {
+              errorMessage = `Allegro offer ID ${offerId} not found. The offer may have been deleted or the reference field in PrestaShop is incorrect.`;
+            } else if (isDeprecatedError) {
               errorMessage = 'This endpoint is no longer supported by Allegro. Please update the application.';
             } else if (is403Error) {
               errorMessage = 'Access forbidden. OAuth token expired or missing permissions. Please reconnect your Allegro account in the Settings tab.';
@@ -4223,10 +4469,11 @@ async function syncStockFromAllegroToPrestashop() {
             
             addSyncLog({
               status: 'error',
-              message: `Failed to fetch stock from Allegro: ${errorMessage}`,
-              productName: mapping.productName || `Offer ${offerId}`,
+              message: `Failed to fetch stock from Allegro (offer ID: ${offerId}): ${errorMessage}`,
+              productName: productName,
+              categoryName: categoryName,
               offerId: offerId,
-              prestashopProductId: mapping.prestashopProductId,
+              prestashopProductId: prestashopProductId,
               stockChange: null
             });
             errorCount++;
@@ -4236,7 +4483,7 @@ async function syncStockFromAllegroToPrestashop() {
           // Get current stock from PrestaShop
           let prestashopStock = 0;
           try {
-            const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${mapping.prestashopProductId}]`, 'GET');
+            const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]`, 'GET');
             if (stockData.stock_availables) {
               const stocks = Array.isArray(stockData.stock_availables) 
                 ? stockData.stock_availables 
@@ -4247,13 +4494,14 @@ async function syncStockFromAllegroToPrestashop() {
               }
             }
           } catch (error) {
-            console.error(`Error fetching PrestaShop stock for product ${mapping.prestashopProductId}:`, error.message);
+            console.error(`Error fetching PrestaShop stock for product ${prestashopProductId}:`, error.message);
             addSyncLog({
               status: 'error',
               message: `Failed to fetch stock from PrestaShop: ${error.message}`,
-              productName: mapping.productName || `Offer ${offerId}`,
+              productName: productName,
+              categoryName: categoryName,
               offerId: offerId,
-              prestashopProductId: mapping.prestashopProductId,
+              prestashopProductId: prestashopProductId,
               stockChange: null
             });
             errorCount++;
@@ -4261,10 +4509,14 @@ async function syncStockFromAllegroToPrestashop() {
           }
 
           // Only update if stock has changed
-          if (allegroStock !== prestashopStock) {
+          // Use strict comparison with type coercion to handle string vs number differences
+          const allegroStockNum = parseInt(allegroStock) || 0;
+          const prestashopStockNum = parseInt(prestashopStock) || 0;
+          
+          if (allegroStockNum !== prestashopStockNum) {
             try {
               // Get stock available ID
-              const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${mapping.prestashopProductId}]`, 'GET');
+              const stockData = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]`, 'GET');
               let stockAvailableId = null;
               
               if (stockData.stock_availables) {
@@ -4281,78 +4533,180 @@ async function syncStockFromAllegroToPrestashop() {
                 // Update existing stock
                 const stockXml = buildStockAvailableXml({
                   id: stockAvailableId,
-                  quantity: parseInt(allegroStock),
-                  id_product: mapping.prestashopProductId
+                  quantity: allegroStockNum,
+                  id_product: prestashopProductId
                 });
                 await prestashopApiRequest(`stock_availables/${stockAvailableId}`, 'PUT', stockXml);
               } else {
-                // Create new stock entry if it doesn't exist
-                const stockXml = buildStockAvailableXml({
-                  quantity: parseInt(allegroStock),
-                  id_product: mapping.prestashopProductId,
-                  id_product_attribute: 0,
-                  id_shop: 1,
-                  id_shop_group: 0,
-                  depends_on_stock: 0,
-                  out_of_stock: allegroStock === 0 ? 1 : 2
+                // Stock entry doesn't exist - PrestaShop API doesn't allow POST for stock_availables
+                // Try to trigger stock entry creation by updating the product
+                // This sometimes causes PrestaShop to automatically create the stock entry
+                try {
+                  console.log(`Attempting to trigger stock entry creation for product ${prestashopProductId} by updating product...`);
+                  const productData = await prestashopApiRequest(`products/${prestashopProductId}`, 'GET');
+                  
+                  if (productData.product) {
+                    const product = productData.product;
+                    // Update product with minimal change to trigger stock entry creation
+                    // Enable stock management if not already enabled
+                    const updateXml = `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <product>
+    <id><![CDATA[${prestashopProductId}]]></id>
+    <advanced_stock_management><![CDATA[0]]></advanced_stock_management>
+  </product>
+</prestashop>`;
+                    await prestashopApiRequest(`products/${prestashopProductId}`, 'PUT', updateXml);
+                    
+                    // Wait a moment for PrestaShop to process
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    // Check again if stock entry was created
+                    const stockDataRetry = await prestashopApiRequest(`stock_availables?filter[id_product]=[${prestashopProductId}]`, 'GET');
+                    let stockAvailableIdRetry = null;
+                    
+                    if (stockDataRetry.stock_availables) {
+                      if (Array.isArray(stockDataRetry.stock_availables) && stockDataRetry.stock_availables.length > 0) {
+                        stockAvailableIdRetry = stockDataRetry.stock_availables[0].stock_available?.id || stockDataRetry.stock_availables[0].id;
+                      } else if (stockDataRetry.stock_availables.stock_available) {
+                        stockAvailableIdRetry = stockDataRetry.stock_availables.stock_available.id;
+                      }
+                    } else if (stockDataRetry.stock_available) {
+                      stockAvailableIdRetry = stockDataRetry.stock_available.id;
+                    }
+                    
+                    if (stockAvailableIdRetry) {
+                      // Stock entry was created! Now update it
+                      const stockXml = buildStockAvailableXml({
+                        id: stockAvailableIdRetry,
+                        quantity: allegroStockNum,
+                        id_product: prestashopProductId
+                      });
+                      await prestashopApiRequest(`stock_availables/${stockAvailableIdRetry}`, 'PUT', stockXml);
+                      
+                      syncedCount++;
+                      addSyncLog({
+                        status: 'success',
+                        message: `Stock synced successfully (stock entry created automatically)`,
+                        productName: productName,
+                        categoryName: categoryName,
+                        offerId: offerId,
+                        prestashopProductId: prestashopProductId,
+                        stockChange: {
+                          from: prestashopStockNum,
+                          to: allegroStockNum
+                        }
+                      });
+                      return;
+                    }
+                  }
+                } catch (triggerError) {
+                  console.warn(`Failed to trigger stock entry creation for product ${prestashopProductId}:`, triggerError.message);
+                }
+                
+                // If we get here, stock entry still doesn't exist
+                console.warn(`Stock entry not found for product ${prestashopProductId}. Stock entries should be created automatically when products are created.`);
+                addSyncLog({
+                  status: 'warning',
+                  message: `Stock entry not found for product. Please enable stock management for this product in PrestaShop back office, or recreate the product.`,
+                  productName: productName,
+                  categoryName: categoryName,
+                  offerId: offerId,
+                  prestashopProductId: prestashopProductId,
+                  stockChange: null
                 });
-                await prestashopApiRequest('stock_availables', 'POST', stockXml);
+                skippedCount++;
+                return;
               }
-
-              // Update mapping sync time
-              mapping.lastStockSync = new Date().toISOString();
-              saveProductMappings();
 
               syncedCount++;
               addSyncLog({
                 status: 'success',
                 message: `Stock synced successfully`,
-                productName: mapping.productName || `Offer ${offerId}`,
+                productName: productName,
+                categoryName: categoryName,
                 offerId: offerId,
-                prestashopProductId: mapping.prestashopProductId,
+                prestashopProductId: prestashopProductId,
                 stockChange: {
                   from: prestashopStock,
                   to: allegroStock
                 }
               });
             } catch (error) {
-              console.error(`Error updating PrestaShop stock for product ${mapping.prestashopProductId}:`, error.message);
+              console.error(`Error updating PrestaShop stock for product ${prestashopProductId}:`, error.message);
               addSyncLog({
                 status: 'error',
                 message: `Failed to update stock in PrestaShop: ${error.message}`,
-                productName: mapping.productName || `Offer ${offerId}`,
+                productName: productName,
+                categoryName: categoryName,
                 offerId: offerId,
-                prestashopProductId: mapping.prestashopProductId,
+                prestashopProductId: prestashopProductId,
                 stockChange: {
-                  from: prestashopStock,
-                  to: allegroStock
+                  from: prestashopStockNum,
+                  to: allegroStockNum
                 }
               });
               errorCount++;
             }
           } else {
-            skippedCount++;
+            // Stock is the same - no update needed
+            unchangedCount++;
+            addSyncLog({
+              status: 'unchanged',
+              message: `Stock unchanged: ${allegroStockNum} (matches PrestaShop)`,
+              productName: productName,
+              categoryName: categoryName,
+              offerId: offerId,
+              prestashopProductId: prestashopProductId,
+              stockChange: {
+                from: prestashopStockNum,
+                to: allegroStockNum
+              }
+            });
           }
         } catch (error) {
-          console.error(`Error processing offer ${offerId}:`, error.message);
+          const prestashopProductId = prestashopProduct.id?.toString();
+          console.error(`Error processing PrestaShop product ${prestashopProductId} (offer ${offerId || 'unknown'}):`, error.message);
+          addSyncLog({
+            status: 'error',
+            message: `Error processing product: ${error.message}`,
+            productName: productName,
+            categoryName: categoryName,
+            offerId: offerId,
+            prestashopProductId: prestashopProductId,
+            stockChange: null
+          });
           errorCount++;
         }
       }));
     }
 
-    // Add summary log
+    // Calculate total products checked (synced + unchanged + skipped + errors)
+    const totalProductsChecked = syncedCount + unchangedCount + skippedCount + errorCount;
+    
+    // Add summary log with product count information
+    let summaryMessage = `Stock sync completed: Checked ${totalProductsChecked} PrestaShop products. `;
+    const parts = [];
+    if (syncedCount > 0) parts.push(`${syncedCount} synced`);
+    if (unchangedCount > 0) parts.push(`${unchangedCount} unchanged`);
+    if (skippedCount > 0) parts.push(`${skippedCount} skipped (no/invalid Allegro offer ID)`);
+    if (errorCount > 0) parts.push(`${errorCount} errors`);
+    
+    summaryMessage += parts.join(', ') || 'No products processed';
+    
     addSyncLog({
       status: 'info',
-      message: `Stock sync completed: ${syncedCount} synced, ${skippedCount} unchanged, ${errorCount} errors`,
+      message: summaryMessage,
       productName: null,
       offerId: null,
       prestashopProductId: null,
-      stockChange: null
+      stockChange: null,
+      totalProductsChecked: totalProductsChecked
     });
 
     lastSyncTime = syncStartTime;
-    saveSyncLogs();
-    console.log(`Stock sync completed: ${syncedCount} synced, ${skippedCount} unchanged, ${errorCount} errors`);
+    // Logs are in-memory only - no file saving needed
+    console.log(`Stock sync completed: Checked ${totalProductsChecked} PrestaShop products. ${syncedCount} synced, ${unchangedCount} unchanged, ${skippedCount} skipped, ${errorCount} errors`);
   } catch (error) {
     console.error('Stock sync error:', error.message);
     addSyncLog({
@@ -4438,7 +4792,7 @@ app.get('/api/sync/logs', (req, res) => {
 app.post('/api/sync/logs/clear', (req, res) => {
   try {
     syncLogs = [];
-    saveSyncLogs();
+    // Logs are in-memory only - no file saving needed
     res.json({
       success: true,
       message: 'Sync logs cleared'
