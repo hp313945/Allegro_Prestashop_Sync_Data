@@ -499,7 +499,7 @@ function setupEventListeners() {
             if (syncCategoriesBtn.disabled) return;
             
             // Show confirmation alert
-            if (!confirm('Are you sure you want to sync categories to PrestaShop?')) {
+            if (!confirm('Are you sure you want to sync categories to PrestaShop.\nOnly use this feature if there are no categories in PrestaShop.\nIf there are categories in PrestaShop, they can be duplicated.')) {
                 return;
             }
             
