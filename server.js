@@ -161,9 +161,9 @@ function loadTokens() {
     if (fs.existsSync(TOKEN_STORAGE_FILE)) {
       const tokenData = JSON.parse(fs.readFileSync(TOKEN_STORAGE_FILE, 'utf8'));
       
-      // Restore tokens
+      // Restore tokens - replace entire object to ensure we get the latest values
       if (tokenData.userOAuthTokens) {
-        userOAuthTokens = { ...userOAuthTokens, ...tokenData.userOAuthTokens };
+        userOAuthTokens = { ...tokenData.userOAuthTokens };
       }
       if (tokenData.accessToken) {
         accessToken = tokenData.accessToken;
@@ -528,9 +528,26 @@ async function getAccessToken() {
 
 /**
  * Get user OAuth access token (refresh if needed)
+ * Reloads tokens from file to ensure we're using the latest token
  */
 async function getUserAccessToken() {
   try {
+    // Reload tokens from file to ensure we have the latest token
+    // This is important because tokens can be updated by OAuth callback
+    // while the server is running
+    try {
+      if (fs.existsSync(TOKEN_STORAGE_FILE)) {
+        const tokenData = JSON.parse(fs.readFileSync(TOKEN_STORAGE_FILE, 'utf8'));
+        if (tokenData.userOAuthTokens) {
+          // Replace the entire object, don't merge, to ensure we get the latest values
+          userOAuthTokens = { ...tokenData.userOAuthTokens };
+        }
+      }
+    } catch (reloadError) {
+      // If reload fails, continue with in-memory token
+      console.warn('Warning: Could not reload tokens from file:', reloadError.message);
+    }
+
     // Check if token is still valid
     if (userOAuthTokens.accessToken && userOAuthTokens.expiresAt && Date.now() < userOAuthTokens.expiresAt) {
       return userOAuthTokens.accessToken;
@@ -570,6 +587,7 @@ async function getUserAccessToken() {
           expiresAt: null,
           userId: null
         };
+        saveTokens(); // Save cleared tokens
         throw new Error('Token refresh failed. Please reconnect your account.');
       }
     }
@@ -1727,14 +1745,15 @@ app.get('/api/offers', async (req, res) => {
 /**
  * Get offer details by offer ID (including description)
  * Uses user OAuth token to access own offers
+ * Updated to use /sale/product-offers/{offerId} (old /sale/offers/{offerId} was deprecated in 2024)
  */
 app.get('/api/offers/:offerId', async (req, res) => {
   try {
     const { offerId } = req.params;
     
-    // Try to fetch offer details using user OAuth token
-    // This should work for your own offers
-    const data = await allegroApiRequest(`/sale/offers/${offerId}`, {}, true); // Use user token
+    // Use the new /sale/product-offers/{offerId} endpoint
+    // The old /sale/offers/{offerId} endpoint was deprecated and removed in 2024
+    const data = await allegroApiRequest(`/sale/product-offers/${offerId}`, {}, true); // Use user token
     
     res.json({
       success: true,
@@ -1746,7 +1765,14 @@ app.get('/api/offers/:offerId', async (req, res) => {
     if (error.response?.status === 401) {
       errorMessage = 'Invalid credentials. Please check your Client ID and Client Secret.';
     } else if (error.response?.status === 403) {
-      errorMessage = 'Access denied. You can only access your own offers.';
+      // Check if it's a deprecated endpoint error
+      const isDeprecatedError = error.response?.data?.userMessage?.includes('no longer supported') || 
+                               error.response?.data?.errors?.some(e => e.userMessage?.includes('no longer supported'));
+      if (isDeprecatedError) {
+        errorMessage = 'This endpoint is no longer supported by Allegro. The application has been updated to use the new API.';
+      } else {
+        errorMessage = 'Access denied. You can only access your own offers.';
+      }
     } else if (error.response?.status === 404) {
       errorMessage = 'Offer not found.';
     } else if (error.response?.status) {
@@ -4061,24 +4087,16 @@ async function syncStockFromAllegroToPrestashop() {
     return;
   }
 
-  // Check if user OAuth token exists and is valid
-  if (!userOAuthTokens.accessToken) {
-    addSyncLog({
-      status: 'warning',
-      message: 'Allegro OAuth not authenticated. Stock sync skipped. Please connect your Allegro account in the Settings tab.',
-      productName: null,
-      offerId: null,
-      prestashopProductId: null,
-      stockChange: null
-    });
-    syncJobRunning = false;
-    return;
-  }
-  
   // Try to validate token by attempting to refresh it if needed
+  // This also reloads the latest token from file to ensure we're using the most recent token
   try {
-    await getUserAccessToken();
+    const token = await getUserAccessToken();
+    if (!token) {
+      throw new Error('No token available');
+    }
+    console.log('Token validated successfully, proceeding with sync...');
   } catch (tokenError) {
+    console.error('Token validation error:', tokenError.message);
     addSyncLog({
       status: 'error',
       message: `OAuth token validation failed: ${tokenError.message}. Please reconnect your Allegro account in the Settings tab.`,
@@ -4145,26 +4163,59 @@ async function syncStockFromAllegroToPrestashop() {
           }
 
           // Get current stock from Allegro
+          // Use the new /sale/product-offers/{offerId} endpoint (old /sale/offers/{offerId} was deprecated in 2024)
+          // Try to get stock from the parts endpoint first (more efficient), fallback to full offer data
           let allegroStock = 0;
           try {
-            const offerData = await allegroApiRequest(`/sale/offers/${offerId}`, {}, true);
-            allegroStock = offerData.stock?.available || 0;
+            // First try the parts endpoint for stock information (more efficient)
+            // This endpoint allows fetching only specific parts like stock without the full offer data
+            // Format: ?include=stock&include=price (multiple include parameters)
+            let stockData = null;
+            try {
+              // Pass include as array - axios will convert to multiple query params: ?include=stock
+              const partsData = await allegroApiRequest(`/sale/product-offers/${offerId}/parts`, { include: ['stock'] }, true);
+              // Check if stock information is in the parts response
+              if (partsData.stock) {
+                stockData = partsData.stock;
+              }
+            } catch (partsError) {
+              // If parts endpoint fails (might not be available or might need different params), fall back to full offer data
+              // This is expected for some API versions, so we don't log it as an error
+            }
+            
+            // If we didn't get stock from parts, fetch full offer data
+            if (!stockData) {
+              const offerData = await allegroApiRequest(`/sale/product-offers/${offerId}`, {}, true);
+              // Stock is in stock.available according to Allegro API documentation
+              stockData = offerData.stock;
+            }
+            
+            // Extract stock value from stock object
+            if (stockData && stockData.available !== undefined) {
+              allegroStock = parseInt(stockData.available) || 0;
+            }
+            
             // Reset 403 counter on success
             consecutive403Errors = 0;
           } catch (error) {
             console.error(`Error fetching Allegro offer ${offerId}:`, error.message);
             
-            // Check if this is a 403 error
+            // Check if this is a 403 error or deprecated endpoint error
             const is403Error = error.response?.status === 403 || error.status === 403;
-            if (is403Error) {
+            const isDeprecatedError = error.response?.data?.userMessage?.includes('no longer supported') || 
+                                     error.response?.data?.errors?.some(e => e.userMessage?.includes('no longer supported'));
+            
+            if (is403Error || isDeprecatedError) {
               consecutive403Errors++;
             } else {
               consecutive403Errors = 0; // Reset counter for non-403 errors
             }
             
-            // Provide more specific error message for 403 errors
+            // Provide more specific error message
             let errorMessage = error.message;
-            if (is403Error) {
+            if (isDeprecatedError) {
+              errorMessage = 'This endpoint is no longer supported by Allegro. Please update the application.';
+            } else if (is403Error) {
               errorMessage = 'Access forbidden. OAuth token expired or missing permissions. Please reconnect your Allegro account in the Settings tab.';
             } else if (error.message.includes('OAuth')) {
               errorMessage = 'OAuth authentication required. Please connect your Allegro account in the Settings tab.';
