@@ -4241,16 +4241,22 @@ async function syncStockFromAllegroToPrestashop() {
     return;
   }
 
-  // Check if credentials are configured
-  if (!prestashopCredentials.baseUrl || !prestashopCredentials.apiKey) {
-    addSyncLog({
-      status: 'warning',
-      message: 'PrestaShop not configured. Stock sync skipped.',
-      productName: null,
-      offerId: null,
-      prestashopProductId: null,
-      stockChange: null
-    });
+  // Check if basic configuration is ready.
+  // If Allegro or PrestaShop are not configured yet, silently skip sync
+  // instead of polluting the Sync Stock Log with warnings during setup.
+  const hasPrestashopConfig =
+    !!(prestashopCredentials.baseUrl && prestashopCredentials.apiKey);
+  const hasAllegroConfig =
+    !!(
+      (userOAuthTokens.accessToken || userOAuthTokens.refreshToken) &&
+      userCredentials.clientId &&
+      userCredentials.clientSecret
+    );
+
+  if (!hasPrestashopConfig || !hasAllegroConfig) {
+    console.log(
+      'Stock sync prerequisites not met (Allegro/PrestaShop not fully configured). Sync skipped.'
+    );
     return;
   }
 
