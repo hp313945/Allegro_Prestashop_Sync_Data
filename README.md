@@ -1,3 +1,9 @@
+Hi qlwik2 Im petro.
+As i said, I want to work with you on outside from Freelancer.
+Because freelancer withdraw term and fee is not good for me.
+Please contact me via Telegram @petroDev.
+Telegram is real time chatting and easy to send necessary data.
+
 # Allegro PrestaShop Sync Data
 
 ## Quick Ubuntu Setup
