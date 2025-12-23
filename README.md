@@ -1,54 +1,84 @@
-Hi qlwik2 Im petro.
+## Allegro PrestaShop Sync Data
 
-As i said, I want to work with you on outside from Freelancer.
+Simple guide to run this tool on your own computer.
 
-Telegram is real time chatting and easy to send necessary data.
+---
 
-Please contact me @petro2.
+## 1. Requirements
 
+- **Node.js**: Install the LTS version (recommended 18+).  
+  - Download from: `https://nodejs.org`
+- **npm**: Comes together with Node.js.
 
+---
 
-Thx.
+## 2. First Setup (one time)
 
-# Allegro PrestaShop Sync Data
+1. **Download or copy the project folder** to your computer.
+2. Open a **terminal / PowerShell** in the project folder  
+   (the folder that contains `package.json` and `server.js`).
+3. Install all Node modules:
 
-## Quick Ubuntu Setup
+   ```bash
+   npm install
+   ```
 
-### 1. Start Server
+   This will create the `node_modules` folder automatically.
 
-Start the server with the interval timer disabled:
+---
+
+## 3. Start the Server
+
+### Option A – Normal start (default)
+
+```bash
+npm start
+```
+
+The server will start on port **3000** (or as configured in the code).
+
+### Option B – Start without internal timer (for cron use)
 
 ```bash
 USE_INTERVAL_TIMER=false node server.js
 ```
 
-### 2. Setup Cron Job
+---
 
-To automatically trigger the sync every 5 minutes using cron:
+## 4. Automatic Sync with Cron (Ubuntu / Linux)
 
-1. Open your crontab for editing:
+If you want the sync to run automatically every 5 minutes:
+
+1. Open crontab for editing:
+
    ```bash
    crontab -e
    ```
 
-2. If prompted, choose your preferred editor (nano is recommended for beginners)
+2. If asked, choose an editor (for beginners, **nano** is easiest).
 
-3. Add the following line to the file:
-   ```
+3. Add this line at the end of the file:
+
+   ```bash
    */5 * * * * curl -X POST http://localhost:3000/api/sync/trigger
    ```
 
 4. Save and exit:
-   - If using **nano**: Press `Ctrl+X`, then `Y`, then `Enter`
-   - If using **vim**: Press `Esc`, type `:wq`, then `Enter`
+   - **nano**: `Ctrl + X`, then `Y`, then `Enter`
+   - **vim**: `Esc`, type `:wq`, then `Enter`
 
-5. Verify the crontab was added:
+5. Check that the cron job was added:
+
    ```bash
    crontab -l
    ```
 
-The cron job will now run every 5 minutes automatically.
+Now the sync will be triggered automatically every 5 minutes.
 
-### 3. Done
+---
 
-Your sync will now be triggered automatically every 5 minutes via cron.
+## 5. Stop the Server
+
+In the terminal where the server is running, press:
+
+- `Ctrl + C`
