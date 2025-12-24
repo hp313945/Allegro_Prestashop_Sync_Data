@@ -84,7 +84,7 @@ openssl req -x509 -newkey rsa:4096 -keyout ssl/server.key -out ssl/server.crt -d
    FORCE_HTTPS=true npm start
    ```
 
-5. **Custom HTTPS port** (default is 3443):
+5. **Custom HTTPS port** (default is 3300):
    ```bash
    HTTPS_PORT=443 npm start
    ```
@@ -114,7 +114,7 @@ If you want the sync to run automatically every 5 minutes:
 
    **If using HTTPS:**
    ```bash
-   */5 * * * * curl -k -X POST https://localhost:3443/api/sync/trigger
+   */5 * * * * curl -k -X POST https://localhost:3300/api/sync/trigger
    ```
    (The `-k` flag skips certificate verification for self-signed certs)
 

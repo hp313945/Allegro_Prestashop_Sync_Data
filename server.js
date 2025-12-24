@@ -5002,7 +5002,7 @@ app.get('/api/sync/status', (req, res) => {
 // SSL Certificate configuration
 const SSL_KEY_PATH = process.env.SSL_KEY_PATH || path.join(__dirname, 'ssl', 'server.key');
 const SSL_CERT_PATH = process.env.SSL_CERT_PATH || path.join(__dirname, 'ssl', 'server.crt');
-const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+const HTTPS_PORT = process.env.HTTPS_PORT || 3300;
 const FORCE_HTTPS = process.env.FORCE_HTTPS === 'true';
 
 // Check if SSL certificates exist

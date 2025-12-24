@@ -25,11 +25,20 @@ if (!fs.existsSync(sslDir)) {
 // Generate certificate (async)
 async function generateCertificates() {
   try {
+    // Get IP addresses from environment variables or use defaults
+    const publicIP = process.env.PUBLIC_IP || '190.131.70.9';
+    const localIP = process.env.LOCAL_IP || '192.168.200.234';
+    
+    // Certificate attributes
     const attrs = [{ name: 'commonName', value: 'localhost' }];
+    
+    // Generate certificate with IP addresses included
+    // This allows the certificate to work with localhost, local IP, and public IP
     const pems = await selfsigned.generate(attrs, {
       keySize: 4096,
       days: 365,
-      algorithm: 'sha256'
+      algorithm: 'sha256',
+      ip: ['127.0.0.1', 'localhost', localIP, publicIP] // Include all IPs
     });
 
     // Write certificate and key files
@@ -48,6 +57,15 @@ async function generateCertificates() {
     console.log('✓ SSL certificates generated successfully!');
     console.log('  - ssl/server.key');
     console.log('  - ssl/server.crt');
+    console.log('');
+    console.log('Certificate includes the following IPs:');
+    console.log('  - 127.0.0.1 (localhost)');
+    console.log('  - localhost');
+    console.log(`  - ${localIP} (local IP)`);
+    console.log(`  - ${publicIP} (public IP)`);
+    console.log('');
+    console.log('You can customize IPs by setting environment variables:');
+    console.log('  PUBLIC_IP=your.public.ip LOCAL_IP=your.local.ip npm run generate-cert');
     console.log('');
     console.log('You can now start the server with: npm start');
   } catch (error) {
