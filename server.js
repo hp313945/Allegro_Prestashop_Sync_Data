@@ -3,6 +3,8 @@ const cors = require('cors');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
+const http = require('http');
 const FormData = require('form-data'); 
 require('dotenv').config(); 
 
@@ -4997,10 +4999,67 @@ app.get('/api/sync/status', (req, res) => {
   });
 });
 
+// SSL Certificate configuration
+const SSL_KEY_PATH = process.env.SSL_KEY_PATH || path.join(__dirname, 'ssl', 'server.key');
+const SSL_CERT_PATH = process.env.SSL_CERT_PATH || path.join(__dirname, 'ssl', 'server.crt');
+const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+const FORCE_HTTPS = process.env.FORCE_HTTPS === 'true';
+
+// Check if SSL certificates exist
+const sslKeyExists = fs.existsSync(SSL_KEY_PATH);
+const sslCertExists = fs.existsSync(SSL_CERT_PATH);
+const hasSSLCertificates = sslKeyExists && sslCertExists;
+
 // Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  // Start the stock sync cron job
-  startStockSyncCron();
-});
+if (hasSSLCertificates) {
+  // HTTPS server
+  try {
+    const httpsOptions = {
+      key: fs.readFileSync(SSL_KEY_PATH),
+      cert: fs.readFileSync(SSL_CERT_PATH)
+    };
+
+    const httpsServer = https.createServer(httpsOptions, app);
+    httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
+      console.log(`HTTPS Server running on port ${HTTPS_PORT} (accessible from all network interfaces)`);
+      // Start the stock sync cron job
+      startStockSyncCron();
+    });
+
+    // Optionally redirect HTTP to HTTPS
+    if (FORCE_HTTPS) {
+      const httpApp = express();
+      httpApp.use((req, res) => {
+        res.redirect(`https://${req.get('host').replace(/:\d+$/, '')}:${HTTPS_PORT}${req.url}`);
+      });
+      http.createServer(httpApp).listen(PORT, '0.0.0.0', () => {
+        console.log(`HTTP Server running on port ${PORT} (redirecting to HTTPS)`);
+      });
+    } else {
+      // Also start HTTP server on default port if not forcing HTTPS
+      http.createServer(app).listen(PORT, '0.0.0.0', () => {
+        console.log(`HTTP Server also running on port ${PORT}`);
+      });
+    }
+  } catch (error) {
+    console.error('Error starting HTTPS server:', error.message);
+    console.log('Falling back to HTTP server...');
+    http.createServer(app).listen(PORT, '0.0.0.0', () => {
+      console.log(`HTTP Server running on port ${PORT} (accessible from all network interfaces)`);
+      // Start the stock sync cron job
+      startStockSyncCron();
+    });
+  }
+} else {
+  // HTTP server only (development mode)
+  http.createServer(app).listen(PORT, '0.0.0.0', () => {
+    console.log(`HTTP Server running on port ${PORT} (accessible from all network interfaces)`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Note: HTTPS not configured. SSL certificates not found.');
+      console.log(`Expected paths: ${SSL_KEY_PATH}, ${SSL_CERT_PATH}`);
+    }
+    // Start the stock sync cron job
+    startStockSyncCron();
+  });
+}
 
