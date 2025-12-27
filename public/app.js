@@ -5434,7 +5434,7 @@ function displaySyncLogs(logs) {
                     if (price === null || price === undefined) return 'N/A';
                     return typeof price === 'number' ? price.toFixed(2) : parseFloat(price).toFixed(2);
                 };
-                priceInfo = `<span class="product-check-price">Price: Allegro ${formatPrice(log.allegroPrice)} PLN | PrestaShop ${formatPrice(log.prestashopPrice)} PLN</span>`;
+                priceInfo = `<span class="product-check-price">Price: ${formatPrice(log.prestashopPrice)} PLN → ${formatPrice(log.allegroPrice)} PLN</span>`;
             }
             
             let idsInfo = '';
@@ -5487,7 +5487,7 @@ function displaySyncLogs(logs) {
                             ${idsInfo}
                         </div>
                     </div>
-                    <div class="product-check-sync-date">${syncDateDisplay}</div>
+                    <div class="product-check-sync-date" style="font-size: 0.75em; color: #999;">${syncDateDisplay}</div>
                 </div>
             `;
         }).join('');
@@ -5508,27 +5508,29 @@ function displaySyncLogs(logs) {
         const timestamp = new Date(log.timestamp).toLocaleString();
         const statusClass = log.status || 'info';
         
+        const formatPrice = (price) => {
+            if (price === null || price === undefined) return 'N/A';
+            return typeof price === 'number' ? price.toFixed(2) : parseFloat(price).toFixed(2);
+        };
+        
+        // Always display stock if stockChange data is available
         let stockChangeHtml = '';
         if (log.stockChange && log.stockChange.from !== null && log.stockChange.to !== null) {
             stockChangeHtml = `
-                <div class="sync-log-stock-change">
-                    Stock: ${log.stockChange.from} <span class="stock-arrow">→</span> ${log.stockChange.to}
+                <div class="sync-log-stock-change" style="font-size: 0.9em; color: #555; margin-top: 4px;">
+                    <span style="font-weight: 500;">Stock:</span> ${log.stockChange.from} → ${log.stockChange.to}
                 </div>
             `;
         }
         
-        // Display prices from Allegro and PrestaShop
+        // Always display prices from Allegro and PrestaShop if available
         let priceHtml = '';
         if (log.allegroPrice !== null && log.allegroPrice !== undefined || log.prestashopPrice !== null && log.prestashopPrice !== undefined) {
-            const formatPrice = (price) => {
-                if (price === null || price === undefined) return 'N/A';
-                return typeof price === 'number' ? price.toFixed(2) : parseFloat(price).toFixed(2);
-            };
             priceHtml = `
                 <div class="sync-log-price" style="font-size: 0.9em; color: #555; margin-top: 4px;">
                     <span style="font-weight: 500;">Price:</span> 
-                    Allegro: <span style="color: #2196F3;">${formatPrice(log.allegroPrice)} PLN</span> | 
-                    PrestaShop: <span style="color: #4CAF50;">${formatPrice(log.prestashopPrice)} PLN</span>
+                    <span style="color: #4CAF50;">${formatPrice(log.prestashopPrice)} PLN</span> → 
+                    <span style="color: #2196F3;">${formatPrice(log.allegroPrice)} PLN</span>
                 </div>
             `;
         }
@@ -5575,7 +5577,7 @@ function displaySyncLogs(logs) {
         return `
             <div class="sync-log-entry ${statusClass}">
                 <div class="sync-log-header">
-                    <div class="sync-log-timestamp">${timestamp}</div>
+                    <div class="sync-log-timestamp" style="font-size: 0.75em; color: #999;">${timestamp}</div>
                     <span class="sync-log-status ${statusClass}">${statusClass}</span>
                 </div>
                 <div class="sync-log-details">

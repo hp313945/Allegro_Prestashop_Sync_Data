@@ -1684,6 +1684,40 @@ function buildLocalizedFieldXml(tagName, items) {
 }
 
 /**
+ * Normalize localized field from PrestaShop API format to buildProductXml format
+ * Handles different PrestaShop API response formats
+ */
+function normalizeLocalizedField(field, fallbackValue = '') {
+  if (!field) {
+    return [{ id: '1', value: fallbackValue }, { id: '2', value: fallbackValue }];
+  }
+  
+  // If already in correct format: [{id: '1', value: '...'}, ...]
+  if (Array.isArray(field) && field.length > 0 && field[0].id && field[0].value !== undefined) {
+    return field;
+  }
+  
+  // If it's an object with language keys: {1: '...', 2: '...'}
+  if (typeof field === 'object' && !Array.isArray(field)) {
+    const result = [];
+    for (const [langId, value] of Object.entries(field)) {
+      if (langId !== 'id' && value !== undefined && value !== null) {
+        result.push({ id: langId, value: String(value) });
+      }
+    }
+    if (result.length > 0) return result;
+  }
+  
+  // If it's a simple string, convert to array format
+  if (typeof field === 'string') {
+    return [{ id: '1', value: field }, { id: '2', value: field }];
+  }
+  
+  // Fallback
+  return [{ id: '1', value: fallbackValue }, { id: '2', value: fallbackValue }];
+}
+
+/**
  * Build XML body for a PrestaShop product
  *
  * NOTE:
@@ -1703,9 +1737,13 @@ function buildProductXml(product) {
         .join('')}</categories></associations>`
     : '';
 
+  // Include ID if provided (required for PUT/update operations)
+  const idXml = product.id ? `<id><![CDATA[${product.id}]]></id>` : '';
+  
   return `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
   <product>
+    ${idXml}
     <id_shop_default>${xmlEscape(product.id_shop_default)}</id_shop_default>
     <id_tax_rules_group>${xmlEscape(
       product.id_tax_rules_group !== undefined ? product.id_tax_rules_group : 0
@@ -1787,6 +1825,20 @@ function buildStockAvailableXml(stockAvailable) {
     )}</out_of_stock>
     <quantity>${xmlEscape(stockAvailable.quantity)}</quantity>
   </stock_available>
+</prestashop>`;
+}
+
+/**
+ * Build minimal XML for updating only product price in PrestaShop
+ * This is a partial update - only the price field will be changed, all other fields are preserved
+ */
+function buildProductPriceUpdateXml(productId, price) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <product>
+    <id><![CDATA[${productId}]]></id>
+    <price><![CDATA[${Number(price).toFixed(2)}]]></price>
+  </product>
 </prestashop>`;
 }
 
@@ -4931,14 +4983,14 @@ app.get('/api/export/products.csv', authMiddleware, async (req, res) => {
 });
 
 /**
- * Sync stock from Allegro to PrestaShop
+ * Sync stock and price from Allegro to PrestaShop
  * 
  * How it works:
  * 1. Fetches all products from PrestaShop
  * 2. For each product, reads the 'reference' field which contains the Allegro offer ID
- * 3. Uses the Allegro offer ID to fetch current stock from Allegro API
- * 4. Compares Allegro stock with PrestaShop stock
- * 5. Updates PrestaShop stock if different
+ * 3. Uses the Allegro offer ID to fetch current stock and price from Allegro API
+ * 4. Compares Allegro stock/price with PrestaShop stock/price
+ * 5. Updates PrestaShop stock and price if different
  * 
  * Requirements:
  * - PrestaShop products must have the Allegro offer ID saved in the 'reference' field
@@ -5004,11 +5056,14 @@ async function syncStockFromAllegroToPrestashop() {
   let errorCount = 0;
   let skippedCount = 0;
   let unchangedCount = 0;
+  let priceSyncedCount = 0;
+  let priceUnchangedCount = 0;
+  let priceErrorCount = 0;
   let consecutive403Errors = 0;
   const MAX_CONSECUTIVE_403 = 3; // Stop after 3 consecutive 403 errors
 
   try {
-    console.log('Starting stock sync from Allegro to PrestaShop...');
+    console.log('Starting stock & price sync from Allegro to PrestaShop...');
     console.log('Fetching PrestaShop products and syncing only existing products...');
     
     // Fetch all PrestaShop products (only products that exist in PrestaShop)
@@ -5577,6 +5632,143 @@ async function syncStockFromAllegroToPrestashop() {
               prestashopPrice: prestashopPrice
             });
           }
+
+          // Price comparison and sync (after stock sync)
+          if (allegroPrice !== null && prestashopPrice !== null) {
+            // Compare prices with tolerance for floating point precision
+            const priceDiff = Math.abs(allegroPrice - prestashopPrice);
+            const priceTolerance = 0.01; // 1 grosz tolerance (0.01 PLN)
+            
+            if (priceDiff > priceTolerance) {
+              // Prices differ - sync from Allegro to PrestaShop
+              try {
+                console.log(`Price differs for product ${prestashopProductId} (Allegro offer ${offerId}): Allegro=${allegroPrice.toFixed(2)}, PrestaShop=${prestashopPrice.toFixed(2)}. Syncing from Allegro to PrestaShop...`);
+                
+                // Fetch full product data to preserve all fields (name, description, categories, etc.)
+                // We need all fields because PrestaShop API may clear fields if not included in PUT request
+                let fullProductForUpdate = fullProduct;
+                if (!fullProductForUpdate || !fullProductForUpdate.name) {
+                  // If we don't have full product data, fetch it now
+                  const productDataForUpdate = await prestashopApiRequest(`products/${prestashopProductId}`, 'GET');
+                  if (productDataForUpdate.product) {
+                    fullProductForUpdate = productDataForUpdate.product;
+                  } else if (productDataForUpdate.products && Array.isArray(productDataForUpdate.products) && productDataForUpdate.products.length > 0) {
+                    fullProductForUpdate = productDataForUpdate.products[0].product || productDataForUpdate.products[0];
+                  } else if (productDataForUpdate.id) {
+                    fullProductForUpdate = productDataForUpdate;
+                  }
+                }
+                
+                if (!fullProductForUpdate || !fullProductForUpdate.name) {
+                  throw new Error('Failed to fetch complete product data for price update');
+                }
+                
+                // Normalize localized fields to ensure they're in the correct format
+                const normalizedName = normalizeLocalizedField(fullProductForUpdate.name, productName || 'Product');
+                const normalizedDescription = normalizeLocalizedField(fullProductForUpdate.description, '');
+                const normalizedDescriptionShort = normalizeLocalizedField(fullProductForUpdate.description_short, '');
+                const normalizedLinkRewrite = normalizeLocalizedField(fullProductForUpdate.link_rewrite, '');
+                
+                // Handle categories associations
+                let categories = [];
+                if (fullProductForUpdate.associations && fullProductForUpdate.associations.categories) {
+                  const cats = fullProductForUpdate.associations.categories.category;
+                  if (Array.isArray(cats)) {
+                    categories = cats.map(cat => ({ id: String(cat.id || cat) }));
+                  } else if (cats && cats.id) {
+                    categories = [{ id: String(cats.id) }];
+                  }
+                }
+                // If no categories in associations, use id_category_default
+                if (categories.length === 0 && fullProductForUpdate.id_category_default) {
+                  categories = [{ id: String(fullProductForUpdate.id_category_default) }];
+                }
+                
+                // Prepare product data with updated price, preserving all other fields
+                const updatedProductData = {
+                  id: String(prestashopProductId), // Required for PUT/update operations
+                  id_shop_default: String(fullProductForUpdate.id_shop_default || '1'),
+                  id_tax_rules_group: String(fullProductForUpdate.id_tax_rules_group !== undefined ? fullProductForUpdate.id_tax_rules_group : '0'),
+                  id_category_default: String(fullProductForUpdate.id_category_default || '2'),
+                  reference: fullProductForUpdate.reference || '',
+                  name: normalizedName,
+                  description: normalizedDescription,
+                  description_short: normalizedDescriptionShort,
+                  link_rewrite: normalizedLinkRewrite,
+                  price: allegroPrice.toFixed(2), // Update only the price
+                  active: String(fullProductForUpdate.active !== undefined ? fullProductForUpdate.active : '1'),
+                  state: String(fullProductForUpdate.state !== undefined ? fullProductForUpdate.state : '1'),
+                  visibility: fullProductForUpdate.visibility || 'both',
+                  available_for_order: String(fullProductForUpdate.available_for_order !== undefined ? fullProductForUpdate.available_for_order : '1'),
+                  show_price: String(fullProductForUpdate.show_price !== undefined ? fullProductForUpdate.show_price : '1'),
+                  indexed: String(fullProductForUpdate.indexed !== undefined ? fullProductForUpdate.indexed : '1'),
+                  on_sale: String(fullProductForUpdate.on_sale !== undefined ? fullProductForUpdate.on_sale : '0'),
+                  online_only: String(fullProductForUpdate.online_only !== undefined ? fullProductForUpdate.online_only : '0'),
+                  is_virtual: String(fullProductForUpdate.is_virtual !== undefined ? fullProductForUpdate.is_virtual : '0'),
+                  advanced_stock_management: String(fullProductForUpdate.advanced_stock_management !== undefined ? fullProductForUpdate.advanced_stock_management : '0'),
+                  condition: fullProductForUpdate.condition || 'new',
+                  associations: categories.length > 0 ? {
+                    categories: {
+                      category: categories
+                    }
+                  } : undefined
+                };
+                
+                // Build complete XML with all fields preserved, only price updated
+                const productXml = buildProductXml(updatedProductData);
+                await prestashopApiRequest(`products/${prestashopProductId}`, 'PUT', productXml);
+                
+                priceSyncedCount++;
+                addSyncLog({
+                  status: 'success',
+                  message: `Price synced from Allegro to PrestaShop: ${prestashopPrice.toFixed(2)} PLN → ${allegroPrice.toFixed(2)} PLN`,
+                  productName: productName,
+                  categoryName: categoryName,
+                  offerId: offerId,
+                  prestashopProductId: prestashopProductId,
+                  stockChange: {
+                    from: prestashopStockNum,
+                    to: allegroStockNum
+                  },
+                  priceChange: {
+                    from: prestashopPrice,
+                    to: allegroPrice
+                  },
+                  allegroPrice: allegroPrice,
+                  prestashopPrice: prestashopPrice // Keep original PrestaShop price to show before/after in UI
+                });
+              } catch (priceError) {
+                console.error(`Error updating PrestaShop price for product ${prestashopProductId}:`, priceError.message);
+                priceErrorCount++;
+                addSyncLog({
+                  status: 'error',
+                  message: `Failed to sync price: ${priceError.message}`,
+                  productName: productName,
+                  categoryName: categoryName,
+                  offerId: offerId,
+                  prestashopProductId: prestashopProductId,
+                  stockChange: {
+                    from: prestashopStockNum,
+                    to: allegroStockNum
+                  },
+                  priceChange: {
+                    from: prestashopPrice,
+                    to: allegroPrice
+                  },
+                  allegroPrice: allegroPrice,
+                  prestashopPrice: prestashopPrice
+                });
+              }
+            } else {
+              // Prices are the same (within tolerance) - no update needed
+              priceUnchangedCount++;
+              // Note: We don't log every unchanged price to avoid log spam
+              // The price info is already included in stock sync logs above
+            }
+          } else {
+            // One or both prices are missing - skip price sync
+            // This is expected for some products, so we don't log it as an error
+          }
         } catch (error) {
           const prestashopProductId = prestashopProduct.id?.toString();
           console.error(`Error processing PrestaShop product ${prestashopProductId} (offer ${offerId || 'unknown'}):`, error.message);
@@ -5600,14 +5792,25 @@ async function syncStockFromAllegroToPrestashop() {
     const totalProductsChecked = syncedCount + unchangedCount + skippedCount + errorCount;
     
     // Add summary log with product count information
-    let summaryMessage = `Stock sync completed: Checked ${totalProductsChecked} PrestaShop products. `;
+    let summaryMessage = `Stock & Price sync completed: Checked ${totalProductsChecked} PrestaShop products. `;
     const parts = [];
-    if (syncedCount > 0) parts.push(`${syncedCount} synced`);
-    if (unchangedCount > 0) parts.push(`${unchangedCount} unchanged`);
+    if (syncedCount > 0) parts.push(`${syncedCount} stock synced`);
+    if (unchangedCount > 0) parts.push(`${unchangedCount} stock unchanged`);
     if (skippedCount > 0) parts.push(`${skippedCount} skipped (no/invalid Allegro offer ID)`);
-    if (errorCount > 0) parts.push(`${errorCount} errors`);
+    if (errorCount > 0) parts.push(`${errorCount} stock errors`);
     
-    summaryMessage += parts.join(', ') || 'No products processed';
+    // Add price sync statistics
+    const priceParts = [];
+    if (priceSyncedCount > 0) priceParts.push(`${priceSyncedCount} prices synced`);
+    if (priceUnchangedCount > 0) priceParts.push(`${priceUnchangedCount} prices unchanged`);
+    if (priceErrorCount > 0) priceParts.push(`${priceErrorCount} price errors`);
+    
+    if (priceParts.length > 0) {
+      summaryMessage += parts.join(', ') || 'No products processed';
+      summaryMessage += ` | Price sync: ${priceParts.join(', ')}`;
+    } else {
+      summaryMessage += parts.join(', ') || 'No products processed';
+    }
     
     addSyncLog({
       status: 'info',
@@ -5621,7 +5824,7 @@ async function syncStockFromAllegroToPrestashop() {
 
     lastSyncTime = syncStartTime;
     // Logs are in-memory only - no file saving needed
-    console.log(`Stock sync completed: Checked ${totalProductsChecked} PrestaShop products. ${syncedCount} synced, ${unchangedCount} unchanged, ${skippedCount} skipped, ${errorCount} errors`);
+    console.log(`Stock & Price sync completed: Checked ${totalProductsChecked} PrestaShop products. Stock: ${syncedCount} synced, ${unchangedCount} unchanged, ${skippedCount} skipped, ${errorCount} errors. Price: ${priceSyncedCount} synced, ${priceUnchangedCount} unchanged, ${priceErrorCount} errors`);
   } catch (error) {
     console.error('Stock sync error:', error.message);
     addSyncLog({
