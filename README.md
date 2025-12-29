@@ -13,7 +13,7 @@ A comprehensive Node.js application for synchronizing product data between Alleg
 - 🔌 **Allegro API Integration**: OAuth 2.0 authentication and product import from Allegro.pl
 - 🛒 **PrestaShop Integration**: Full integration with PrestaShop API for product management
 - 📦 **Product Import**: Import offers from Allegro to PrestaShop with images and descriptions
-- 🔄 **Automatic Sync**: Automatic stock and price synchronization every 5 minutes
+- 🔄 **Automatic Sync**: Automatic stock and price synchronization (configurable interval, default: 7 minutes)
 - 📊 **Category Management**: Sync and manage product categories
 - 📈 **Sync Logging**: Track all synchronization activities
 - 👥 **User Management**: Admin panel for managing users (admin role only)
@@ -69,6 +69,7 @@ ADMIN_PASSWORD=your_secure_password
 PORT=3000                    # HTTP server port (default: 3000)
 HTTPS_PORT=3300              # HTTPS server port (default: 3300)
 USE_INTERVAL_TIMER=true      # Use internal timer for sync (default: true)
+SYNC_INTERVAL_MINUTES=7      # Sync interval in minutes (default: 7)
 DB_CONNECTION_LIMIT=100      # Database connection pool limit (default: 100)
 
 # Security (OPTIONAL)
@@ -215,7 +216,7 @@ openssl req -x509 -newkey rsa:4096 -keyout ssl/server.key -out ssl/server.crt -d
 
 The application can automatically sync stock and prices from Allegro to PrestaShop:
 
-- **Internal Timer**: Enabled by default, runs every 5 minutes
+- **Internal Timer**: Enabled by default, runs at configurable intervals (default: 7 minutes, set via `SYNC_INTERVAL_MINUTES` in `.env`)
 - **Manual Trigger**: Use "Run Sync Now" button in the Sync Stock Log tab
 - **Start/Stop Timer**: Control the automatic sync timer from the web interface
 
@@ -262,7 +263,7 @@ If you prefer to use system cron instead of the internal timer:
    crontab -l
    ```
 
-The sync will now be triggered automatically every 5 minutes via cron.
+The sync will now be triggered automatically at the configured interval (default: 7 minutes) via cron. Configure the interval using `SYNC_INTERVAL_MINUTES` in your `.env` file.
 
 ---
 

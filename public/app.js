@@ -156,9 +156,11 @@ async function login(email, password) {
         // Update user email display
         updateUserDisplay(data.user);
         
-        // Load credentials from database after login
-        await loadCredentialsFromAPI();
-        await loadPrestashopConfigFromAPI();
+        // Load credentials from database after login in parallel for faster loading
+        await Promise.all([
+            loadCredentialsFromAPI(),
+            loadPrestashopConfigFromAPI()
+        ]);
         
         return data;
     } catch (error) {
@@ -219,9 +221,11 @@ async function checkAuth() {
             updateUserDisplay(currentUser);
             showMainInterface();
             
-            // Load credentials from database
-            await loadCredentialsFromAPI();
-            await loadPrestashopConfigFromAPI();
+            // Load credentials from database in parallel for faster loading
+            await Promise.all([
+                loadCredentialsFromAPI(),
+                loadPrestashopConfigFromAPI()
+            ]);
             
             // Show message that user is already logged in
             if (currentUser && currentUser.email) {
@@ -375,11 +379,38 @@ async function loadCredentialsFromAPI() {
         const data = await response.json();
         
         if (data.success && data.credentials && data.credentials.clientId) {
-            // Restore credentials to input fields (only clientId, secret is masked)
+            // Restore credentials to input fields (only clientId, secret is masked for security)
             const clientIdInput = document.getElementById('clientId');
             if (clientIdInput) {
                 clientIdInput.value = data.credentials.clientId;
             }
+            
+            // If client secret exists in DB (indicated by '***' or non-null value), show indicator
+            const clientSecretInput = document.getElementById('clientSecret');
+            if (clientSecretInput && data.credentials.clientSecret) {
+                // Set placeholder to indicate secret is saved but masked
+                clientSecretInput.placeholder = 'Client Secret is saved (hidden for security)';
+                clientSecretInput.value = ''; // Keep field empty for security
+                // Add a visual indicator class
+                clientSecretInput.classList.add('secret-saved');
+            }
+            
+            // Update auth status immediately if credentials are present (even before test)
+            const authStatusEl = document.getElementById('authStatus');
+            if (authStatusEl && data.credentials.clientSecret) {
+                authStatusEl.textContent = 'API Credentials: Configured';
+                authStatusEl.className = 'quick-status-badge success';
+                authStatusEl.title = 'Allegro API credentials (Client ID/Secret) are saved';
+            }
+            
+            // Show disconnect button if credentials are present
+            const clearBtn = document.getElementById('clearCredentialsBtn');
+            if (clearBtn && data.credentials.clientSecret) {
+                clearBtn.style.display = 'block';
+            }
+            
+            // Update config status indicators immediately
+            updateConfigStatuses();
             
             // Check if credentials are still valid by testing authentication
             const authResponse = await authFetch(`${API_BASE}/api/test-auth`).catch(() => null);
@@ -387,18 +418,11 @@ async function loadCredentialsFromAPI() {
                 const authData = await authResponse.json();
                 
                 if (authData.success) {
-                    // Credentials are valid - restore authentication state
-                    const authStatusEl = document.getElementById('authStatus');
+                    // Credentials are valid - update authentication state
                     if (authStatusEl) {
                         authStatusEl.textContent = 'API Credentials: Configured';
                         authStatusEl.className = 'quick-status-badge success';
                         authStatusEl.title = 'Allegro API credentials (Client ID/Secret) are saved and working';
-                    }
-                    
-                    // Show disconnect button
-                    const clearBtn = document.getElementById('clearCredentialsBtn');
-                    if (clearBtn) {
-                        clearBtn.style.display = 'block';
                     }
                     
                     // Update config status indicators and button states
@@ -410,6 +434,11 @@ async function loadCredentialsFromAPI() {
                     // Update UI state
                     updateUIState(true);
                 }
+            } else {
+                // Even if test fails, credentials are still configured
+                // Check OAuth status anyway
+                await checkOAuthStatus();
+                updateUIState(true);
             }
         }
     } catch (error) {
@@ -425,10 +454,17 @@ async function loadSavedCredentials() {
 
 // Update config status indicators
 function updateConfigStatuses() {
+    // Check if Allegro credentials are actually saved by checking the input fields
+    const clientIdInput = document.getElementById('clientId');
+    const clientSecretInput = document.getElementById('clientSecret');
+    const hasAllegroCredentials = clientIdInput && clientIdInput.value.trim() && 
+                                  (clientSecretInput && (clientSecretInput.value.trim() || clientSecretInput.classList.contains('secret-saved')));
+    const isAllegroAuthenticated = checkAuthentication();
+    
     // Update Allegro status
     const allegroStatus = document.getElementById('allegroConfigStatus');
     if (allegroStatus) {
-        if (checkAuthentication()) {
+        if (hasAllegroCredentials || isAllegroAuthenticated) {
             allegroStatus.textContent = 'Connected';
             allegroStatus.className = 'config-status success';
         } else {
@@ -440,7 +476,7 @@ function updateConfigStatuses() {
     // Update Allegro quick status
     const allegroQuickStatus = document.getElementById('allegroQuickStatus');
     if (allegroQuickStatus) {
-        if (checkAuthentication()) {
+        if (hasAllegroCredentials || isAllegroAuthenticated) {
             allegroQuickStatus.textContent = 'Allegro: Connected';
             allegroQuickStatus.className = 'quick-status-badge success';
         } else {
@@ -449,11 +485,20 @@ function updateConfigStatuses() {
         }
     }
     
-    // Update PrestaShop status
+    // Check if PrestaShop credentials are actually saved by checking the input fields
+    const prestashopUrlInput = document.getElementById('prestashopUrl');
+    const prestashopApiKeyInput = document.getElementById('prestashopApiKey');
+    const hasPrestashopCredentials = prestashopUrlInput && prestashopUrlInput.value.trim() && 
+                                     prestashopApiKeyInput && (prestashopApiKeyInput.value.trim() || prestashopApiKeyInput.classList.contains('secret-saved'));
+    
+    // Update PrestaShop status - show "Connected" if credentials are saved, "Configured" if saved but not tested
     const prestashopStatusEl = document.getElementById('prestashopConfigStatus');
     if (prestashopStatusEl) {
         if (prestashopConfigured && prestashopAuthorized) {
             prestashopStatusEl.textContent = 'Connected';
+            prestashopStatusEl.className = 'config-status success';
+        } else if (hasPrestashopCredentials || prestashopConfigured) {
+            prestashopStatusEl.textContent = 'Configured';
             prestashopStatusEl.className = 'config-status success';
         } else {
             prestashopStatusEl.textContent = 'Not Configured';
@@ -467,6 +512,9 @@ function updateConfigStatuses() {
         if (prestashopConfigured && prestashopAuthorized) {
             prestashopQuickStatus.textContent = 'PrestaShop: Connected';
             prestashopQuickStatus.className = 'quick-status-badge success';
+        } else if (hasPrestashopCredentials || prestashopConfigured) {
+            prestashopQuickStatus.textContent = 'PrestaShop: Configured';
+            prestashopQuickStatus.className = 'quick-status-badge success';
         } else {
             prestashopQuickStatus.textContent = 'PrestaShop: Not Configured';
             prestashopQuickStatus.className = 'quick-status-badge error';
@@ -478,6 +526,9 @@ function updateConfigStatuses() {
     if (prestashopHeaderStatus) {
         if (prestashopConfigured && prestashopAuthorized) {
             prestashopHeaderStatus.textContent = 'Connected';
+            prestashopHeaderStatus.className = 'status-value success';
+        } else if (hasPrestashopCredentials || prestashopConfigured) {
+            prestashopHeaderStatus.textContent = 'Configured';
             prestashopHeaderStatus.className = 'status-value success';
         } else {
             prestashopHeaderStatus.textContent = 'Not Connected';
@@ -512,7 +563,14 @@ function updateButtonStates() {
                 clearBtn.style.display = 'block';
             }
             if (authorizeBtn) {
-                authorizeBtn.style.display = 'block';
+                // Show button only when OAuth is not connected
+                if (isOAuthConnected) {
+                    authorizeBtn.style.display = 'none';
+                } else {
+                    authorizeBtn.style.display = 'block';
+                    authorizeBtn.textContent = 'Authorize Account';
+                    authorizeBtn.title = 'Click to authorize your Allegro account via OAuth';
+                }
             }
             
             // Make inputs readonly
@@ -988,6 +1046,14 @@ async function saveCredentials() {
             // Authentication successful - show detail interface
             // Credentials are now stored in database, no need for localStorage
             
+            // Clear client secret field for security (value is saved in DB)
+            const clientSecretInput = document.getElementById('clientSecret');
+            if (clientSecretInput) {
+                clientSecretInput.value = '';
+                clientSecretInput.placeholder = 'Client Secret is saved (hidden for security)';
+                clientSecretInput.classList.add('secret-saved');
+            }
+            
             showToast('Allegro API credentials saved and verified successfully. You can now authorize your account.', 'success');
             
             // Show main content
@@ -1095,7 +1161,12 @@ function hideMainInterface() {
 // Clear credentials
 async function clearCredentials() {
     document.getElementById('clientId').value = '';
-    document.getElementById('clientSecret').value = '';
+    const clientSecretInput = document.getElementById('clientSecret');
+    if (clientSecretInput) {
+        clientSecretInput.value = '';
+        clientSecretInput.placeholder = 'Enter Allegro Client Secret';
+        clientSecretInput.classList.remove('secret-saved');
+    }
     // Credentials are stored in database, no need to clear localStorage
     
     const messageEl = document.getElementById('credentialsMessage');
@@ -1198,7 +1269,12 @@ async function clearCredentials() {
 async function clearPrestashopConfig() {
     // Clear input fields
     document.getElementById('prestashopUrl').value = '';
-    document.getElementById('prestashopApiKey').value = '';
+    const apiKeyInput = document.getElementById('prestashopApiKey');
+    if (apiKeyInput) {
+        apiKeyInput.value = '';
+        apiKeyInput.placeholder = 'Enter PrestaShop API Key';
+        apiKeyInput.classList.remove('secret-saved');
+    }
     
     // Remove from localStorage
     // PrestaShop config is stored in database, no need to remove from localStorage
@@ -1394,12 +1470,17 @@ async function checkOAuthStatus() {
         }
         
         // Show/hide authorize button based on authentication and OAuth status
+        // Hide button when OAuth is connected, show only when disconnected
         if (authorizeBtn) {
             if (checkAuthentication()) {
                 if (isOAuthConnected) {
+                    // Hide button when OAuth is connected
                     authorizeBtn.style.display = 'none';
                 } else {
+                    // Show button with "Authorize Account" text when OAuth is not connected
                     authorizeBtn.style.display = 'block';
+                    authorizeBtn.textContent = 'Authorize Account';
+                    authorizeBtn.title = 'Click to authorize your Allegro account via OAuth';
                 }
             } else {
                 authorizeBtn.style.display = 'none';
@@ -1409,10 +1490,9 @@ async function checkOAuthStatus() {
         // Update UI state to refresh Load Offers button and other controls
         updateUIState(true);
 
-        // When OAuth is connected, ensure the Allegro category tree is loaded
-        if (isOAuthConnected) {
-            await loadCategoryTreeRoot(false);
-        }
+        // When OAuth is connected, categories will be loaded by loadCategoriesFromOffers()
+        // Don't load from cache here to avoid displaying stale data
+        // Categories should only be displayed after fresh data is fetched
 
         // If everything is configured on this device, auto-load offers after refresh
         await autoLoadOffersIfReady();
@@ -1587,15 +1667,31 @@ async function handleProductCountChange() {
 
 // Fetch all offers from API (loads all pages)
 async function fetchAllOffers() {
-    // Validate authentication
+    // Validate authentication status (credentials are configured if auth status shows "Configured")
+    // Don't check input field value since secret is masked for security when loaded from DB
     if (!checkAuthentication()) {
         const errorEl = document.getElementById('errorMessage');
         if (errorEl) {
             const errorContentEl = errorEl.querySelector('.error-message-content');
             if (errorContentEl) {
-                errorContentEl.textContent = 'Authentication required. Please test connection first.';
+                errorContentEl.textContent = 'Authentication required. Please configure your Client ID and Client Secret first.';
             } else {
-                errorEl.innerHTML = `<div class="error-message-content">Authentication required. Please test connection first.</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
+                errorEl.innerHTML = `<div class="error-message-content">Authentication required. Please configure your Client ID and Client Secret first.</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
+            }
+            errorEl.style.display = 'flex';
+        }
+        return;
+    }
+    
+    // Check OAuth connection
+    if (!isOAuthConnected) {
+        const errorEl = document.getElementById('errorMessage');
+        if (errorEl) {
+            const errorContentEl = errorEl.querySelector('.error-message-content');
+            if (errorContentEl) {
+                errorContentEl.innerHTML = '<strong>OAuth Authorization Required</strong><br><br>Please click "Authorize Account" to connect your Allegro account. This is required to access your offers.';
+            } else {
+                errorEl.innerHTML = `<div class="error-message-content"><strong>OAuth Authorization Required</strong><br><br>Please click "Authorize Account" to connect your Allegro account. This is required to access your offers.</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
             }
             errorEl.style.display = 'flex';
         }
@@ -1624,11 +1720,24 @@ async function fetchAllOffers() {
             params.append('offset', offset);
             params.append('limit', limit);
             
-            const response = await apiFetch(`${API_BASE}/api/offers?${params}`);
+            // Use authenticated fetch because /api/offers is protected by JWT authMiddleware
+            const response = await authFetch(`${API_BASE}/api/offers?${params}`);
             
             // Check for 401 status before parsing JSON
             if (!response.ok && response.status === 401) {
-                throw new Error('Invalid credentials. Please check your Client ID and Client Secret.');
+                const errorData = await response.json().catch(() => ({}));
+                const errorMsg = errorData.error || 'Invalid credentials. Please check your Client ID and Client Secret.';
+                throw new Error(errorMsg);
+            }
+            
+            // Check for 403 status (OAuth required)
+            if (!response.ok && response.status === 403) {
+                const errorData = await response.json().catch(() => ({}));
+                if (errorData.requiresUserOAuth) {
+                    throw new Error('OAuth authorization required. Please click "Authorize Account" to connect your Allegro account.');
+                }
+                const errorMsg = errorData.error || 'Access denied. Please authorize your account.';
+                throw new Error(errorMsg);
             }
             
             const result = await response.json();
@@ -1797,14 +1906,32 @@ async function fetchOffers(offset = 0, limit = 20) {
     
     // Otherwise, fetch from API (shouldn't happen if Load My Offers was clicked)
     // This is kept for backward compatibility
+    
+    // Validate authentication status (credentials are configured if auth status shows "Configured")
+    // Don't check input field value since secret is masked for security when loaded from DB
     if (!checkAuthentication()) {
         const errorEl = document.getElementById('errorMessage');
         if (errorEl) {
             const errorContentEl = errorEl.querySelector('.error-message-content');
             if (errorContentEl) {
-                errorContentEl.textContent = 'Authentication required. Please test connection first.';
+                errorContentEl.textContent = 'Authentication required. Please configure your Client ID and Client Secret first.';
             } else {
-                errorEl.innerHTML = `<div class="error-message-content">Authentication required. Please test connection first.</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
+                errorEl.innerHTML = `<div class="error-message-content">Authentication required. Please configure your Client ID and Client Secret first.</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
+            }
+            errorEl.style.display = 'flex';
+        }
+        return;
+    }
+    
+    // Check OAuth connection
+    if (!isOAuthConnected) {
+        const errorEl = document.getElementById('errorMessage');
+        if (errorEl) {
+            const errorContentEl = errorEl.querySelector('.error-message-content');
+            if (errorContentEl) {
+                errorContentEl.innerHTML = '<strong>OAuth Authorization Required</strong><br><br>Please click "Authorize Account" to connect your Allegro account. This is required to access your offers.';
+            } else {
+                errorEl.innerHTML = `<div class="error-message-content"><strong>OAuth Authorization Required</strong><br><br>Please click "Authorize Account" to connect your Allegro account. This is required to access your offers.</div><button class="error-message-close" onclick="closeErrorMessage()" title="Close">×</button>`;
             }
             errorEl.style.display = 'flex';
         }
@@ -1826,11 +1953,24 @@ async function fetchOffers(offset = 0, limit = 20) {
         params.append('offset', offset);
         params.append('limit', limit);
         
-        const response = await apiFetch(`${API_BASE}/api/offers?${params}`);
+        // Use authenticated fetch because /api/offers is protected by JWT authMiddleware
+        const response = await authFetch(`${API_BASE}/api/offers?${params}`);
         
         // Check for 401 status before parsing JSON
         if (!response.ok && response.status === 401) {
-            throw new Error('Invalid credentials. Please check your Client ID and Client Secret.');
+            const errorData = await response.json().catch(() => ({}));
+            const errorMsg = errorData.error || 'Invalid credentials. Please check your Client ID and Client Secret.';
+            throw new Error(errorMsg);
+        }
+        
+        // Check for 403 status (OAuth required)
+        if (!response.ok && response.status === 403) {
+            const errorData = await response.json().catch(() => ({}));
+            if (errorData.requiresUserOAuth) {
+                throw new Error('OAuth authorization required. Please click "Authorize Account" to connect your Allegro account.');
+            }
+            const errorMsg = errorData.error || 'Access denied. Please authorize your account.';
+            throw new Error(errorMsg);
         }
         
         const result = await response.json();
@@ -2296,7 +2436,8 @@ async function fetchProductDetails(offerId) {
         } else {
             // For other errors, try the offers endpoint as fallback (only if it's a user offer)
             if (isUserOffer) {
-                const offerResponse = await apiFetch(`${API_BASE}/api/offers/${offerId}`);
+                // Use authenticated fetch because /api/offers is protected by JWT authMiddleware
+                const offerResponse = await authFetch(`${API_BASE}/api/offers/${offerId}`);
                 if (offerResponse.ok) {
                     const offerResult = await offerResponse.json();
                     if (offerResult.success && offerResult.data) {
@@ -3710,6 +3851,14 @@ async function savePrestashopConfig() {
         const data = await response.json();
         
         if (data.success) {
+            // Clear API key field for security (value is saved in DB)
+            const apiKeyInput = document.getElementById('prestashopApiKey');
+            if (apiKeyInput) {
+                apiKeyInput.value = '';
+                apiKeyInput.placeholder = 'API Key is saved (hidden for security)';
+                apiKeyInput.classList.add('secret-saved');
+            }
+            
             showToast('PrestaShop configuration saved successfully!', 'success');
             // Configuration is now stored in database, no need for localStorage
             prestashopConfigured = true;
@@ -3785,6 +3934,14 @@ async function testPrestashopConnection() {
         
         if (testData.success) {
             // Configuration is now stored in database, no need for localStorage
+            // Clear API key field for security (value is saved in DB)
+            const apiKeyInput = document.getElementById('prestashopApiKey');
+            if (apiKeyInput) {
+                apiKeyInput.value = '';
+                apiKeyInput.placeholder = 'API Key is saved (hidden for security)';
+                apiKeyInput.classList.add('secret-saved');
+            }
+            
             showToast(testData.message, 'success');
             prestashopConfigured = true;
             prestashopAuthorized = true; // Mark PrestaShop as authorized after successful test
@@ -3833,24 +3990,46 @@ async function loadPrestashopConfigFromAPI() {
         if (data.success && data.credentials && data.credentials.baseUrl) {
             // Restore configuration to input fields
             document.getElementById('prestashopUrl').value = data.credentials.baseUrl || '';
-            // API key is masked, so we don't populate it
+            
+            // If API key exists in DB (indicated by '***' or non-null value), show indicator
+            const apiKeyInput = document.getElementById('prestashopApiKey');
+            if (apiKeyInput && data.credentials.apiKey) {
+                // Set placeholder to indicate API key is saved but masked
+                apiKeyInput.placeholder = 'API Key is saved (hidden for security)';
+                apiKeyInput.value = ''; // Keep field empty for security
+                // Add a visual indicator class
+                apiKeyInput.classList.add('secret-saved');
+            }
             
             // Show saved configuration info
             updatePrestashopSavedConfigDisplay(data.credentials.baseUrl);
             
             // Mark as configured
             prestashopConfigured = true;
+            
+            // Update config statuses to reflect saved state immediately
+            updateConfigStatuses();
         } else {
             // No saved config - leave empty so user enters their URL
             document.getElementById('prestashopUrl').value = '';
-            document.getElementById('prestashopApiKey').value = '';
+            const apiKeyInput = document.getElementById('prestashopApiKey');
+            if (apiKeyInput) {
+                apiKeyInput.value = '';
+                apiKeyInput.placeholder = 'Enter PrestaShop API Key';
+                apiKeyInput.classList.remove('secret-saved');
+            }
             hidePrestashopSavedConfigDisplay();
         }
     } catch (error) {
         // Silently fail - config may not be configured yet
         console.log('No PrestaShop config found in database or error loading:', error.message);
         document.getElementById('prestashopUrl').value = '';
-        document.getElementById('prestashopApiKey').value = '';
+        const apiKeyInput = document.getElementById('prestashopApiKey');
+        if (apiKeyInput) {
+            apiKeyInput.value = '';
+            apiKeyInput.placeholder = 'Enter PrestaShop API Key';
+            apiKeyInput.classList.remove('secret-saved');
+        }
         hidePrestashopSavedConfigDisplay();
     }
 }
@@ -3860,7 +4039,12 @@ function loadPrestashopConfig() {
     // This function is called during initialization, but credentials should be loaded from API
     // after login. For now, just clear the fields.
     document.getElementById('prestashopUrl').value = '';
-    document.getElementById('prestashopApiKey').value = '';
+    const apiKeyInput = document.getElementById('prestashopApiKey');
+    if (apiKeyInput) {
+        apiKeyInput.value = '';
+        apiKeyInput.placeholder = 'Enter PrestaShop API Key';
+        apiKeyInput.classList.remove('secret-saved');
+    }
     hidePrestashopSavedConfigDisplay();
 }
 
@@ -3922,6 +4106,13 @@ async function checkPrestashopStatus() {
                     const data = await response.json();
                     if (data.success && data.credentials && data.credentials.baseUrl) {
                         updatePrestashopSavedConfigDisplay(data.credentials.baseUrl);
+                        // Also update API key indicator if API key exists
+                        const apiKeyInput = document.getElementById('prestashopApiKey');
+                        if (apiKeyInput && data.credentials.apiKey) {
+                            apiKeyInput.placeholder = 'API Key is saved (hidden for security)';
+                            apiKeyInput.value = ''; // Keep field empty for security
+                            apiKeyInput.classList.add('secret-saved');
+                        }
                     } else {
                         hidePrestashopSavedConfigDisplay();
                     }
@@ -4707,12 +4898,28 @@ function getCategoryAndDescendantIds(categoryId) {
 }
 
 async function loadCategoriesFromOffers() {
-    if (!validateAuth() || !isOAuthConnected) {
+    const categoriesListEl = document.getElementById('categoriesList');
+    if (!categoriesListEl) return;
+    
+    // Check authentication status (credentials are configured if auth status shows "Configured")
+    // Don't check input field value since secret is masked for security
+    if (!checkAuthentication()) {
+        categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #c5221f;">Please configure your Client ID and Client Secret first.</p>';
         return;
     }
     
-    const categoriesListEl = document.getElementById('categoriesList');
-    if (!categoriesListEl) return;
+    // Check OAuth connection
+    if (!isOAuthConnected) {
+        categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #c5221f;">OAuth authorization required. Please click "Authorize Account" to connect your Allegro account.</p>';
+        return;
+    }
+    
+    // Clear old cache to ensure we display only fresh data
+    categoryTreeWithProducts = {};
+    categoryTreeCache = {};
+    categoryTreeInitialized = false;
+    allCategories = [];
+    categoriesWithProducts = [];
     
     // Show a short, friendly loading message
     categoriesListEl.innerHTML = '<div style="text-align: center; padding: 20px; color: #1a73e8; font-size: 0.9em;">Loading categories from your offers...</div>';
@@ -4728,11 +4935,21 @@ async function loadCategoriesFromOffers() {
         
         while (hasMore) {
             // Filter by ACTIVE status to match Allegro website (which shows ACTIVE offers by default)
-            const response = await apiFetch(`${API_BASE}/api/offers?offset=${offset}&limit=${limit}&status=ACTIVE`);
+            // Use authenticated fetch because /api/offers is protected by JWT authMiddleware
+            const response = await authFetch(`${API_BASE}/api/offers?offset=${offset}&limit=${limit}&status=ACTIVE`);
             
             if (!response.ok) {
                 if (response.status === 401) {
-                    throw new Error('Invalid credentials. Please check your Client ID and Client Secret.');
+                    const errorData = await response.json().catch(() => ({}));
+                    const errorMsg = errorData.error || 'Invalid credentials. Please check your Client ID and Client Secret.';
+                    throw new Error(errorMsg);
+                } else if (response.status === 403) {
+                    const errorData = await response.json().catch(() => ({}));
+                    if (errorData.requiresUserOAuth) {
+                        throw new Error('OAuth authorization required. Please click "Authorize Account" to connect your Allegro account.');
+                    }
+                    const errorMsg = errorData.error || 'Access denied. Please authorize your account.';
+                    throw new Error(errorMsg);
                 } else {
                     const errorText = await response.text();
                     console.error(`Failed to fetch offers: ${response.status} ${response.statusText}`, errorText);
@@ -4886,8 +5103,9 @@ async function loadCategoriesFromOffers() {
         if (categoriesArray.length === 0) {
             categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #666;">No categories found in your offers. Load offers to see categories.</p>';
         } else {
-            // Display the category tree in the sidebar
-            await loadCategoryTreeRoot(false);
+            // Display the category tree in the sidebar - use forceReload=true to ensure fresh data is displayed
+            // This ensures categories are only displayed after fresh data is completely fetched and processed
+            await loadCategoryTreeRoot(true);
             
             // Show info message about category counts
             console.log(`✓ Categories loaded: ${categoriesArray.length} categories from ${allOffers.length} offers`);
@@ -4903,7 +5121,20 @@ async function loadCategoriesFromOffers() {
         updateSyncCategoryButtonState();
     } catch (error) {
         console.error('Error loading categories from offers:', error);
-        categoriesListEl.innerHTML = '<p style="text-align: center; padding: 20px; color: #c5221f;">Failed to load categories. Please try again.</p>';
+        let errorMessage = 'Failed to load categories. Please try again.';
+        
+        // Provide more specific error messages
+        if (error.message) {
+            if (error.message.includes('OAuth') || error.message.includes('authorize')) {
+                errorMessage = error.message;
+            } else if (error.message.includes('credentials') || error.message.includes('Client')) {
+                errorMessage = error.message + ' Please check your credentials and try again.';
+            } else {
+                errorMessage = error.message;
+            }
+        }
+        
+        categoriesListEl.innerHTML = `<p style="text-align: center; padding: 20px; color: #c5221f;">${escapeHtml(errorMessage)}</p>`;
     }
 }
 
@@ -4924,6 +5155,12 @@ async function loadCategoryTreeRoot(forceReload = false) {
 
     const rootKey = 'root';
     
+    // If forcing reload, skip all cache checks and go directly to loadCategoryTreeLevel
+    if (forceReload) {
+        await loadCategoryTreeLevel(null, [], forceReload);
+        return;
+    }
+    
     // If we have a tree with products (which includes counts), use it instead of cache
     if (Object.keys(categoryTreeWithProducts).length > 0) {
         await loadCategoryTreeLevel(null, [], forceReload);
@@ -4931,7 +5168,7 @@ async function loadCategoryTreeRoot(forceReload = false) {
     }
     
     // Otherwise, use cache if available and not forcing reload
-    if (!forceReload && categoryTreeInitialized && categoryTreeCache[rootKey]) {
+    if (categoryTreeInitialized && categoryTreeCache[rootKey]) {
         await displayCategories(categoryTreeCache[rootKey], []);
         return;
     }
@@ -4950,29 +5187,53 @@ async function loadCategoryTreeLevel(parentId = null, path = [], forceReload = f
 
     const key = parentId || 'root';
     categoryTreePath = path || [];
-
-    // If we have a built tree with products, use it instead of fetching from API
-    if (Object.keys(categoryTreeWithProducts).length > 0) {
-        const categories = getCategoryChildren(parentId, categoryTreeWithProducts);
-        
-        // Sort categories by name
-        categories.sort((a, b) => {
-            const nameA = (a.name || '').toLowerCase();
-            const nameB = (b.name || '').toLowerCase();
-            return nameA.localeCompare(nameB);
-        });
-        
-        categoryTreeCache[key] = categories;
-        categoryTreeInitialized = true;
-        await displayCategories(categories, categoryTreePath);
+    
+    // If forcing reload, skip cache and only use fresh categoryTreeWithProducts if available
+    if (forceReload) {
+        // Only use categoryTreeWithProducts if it has data (fresh data from loadCategoriesFromOffers)
+        // If no fresh data available yet, don't display anything - wait for fresh data
+        if (Object.keys(categoryTreeWithProducts).length > 0) {
+            const categories = getCategoryChildren(parentId, categoryTreeWithProducts);
+            
+            // Sort categories by name
+            categories.sort((a, b) => {
+                const nameA = (a.name || '').toLowerCase();
+                const nameB = (b.name || '').toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
+            
+            categoryTreeCache[key] = categories;
+            categoryTreeInitialized = true;
+            await displayCategories(categories, categoryTreePath);
+            return;
+        }
+        // If forceReload but no fresh data yet, don't display anything - just return
+        // This prevents displaying stale cached data
         return;
-    }
+    } else {
+        // If we have a built tree with products, use it instead of fetching from API
+        if (Object.keys(categoryTreeWithProducts).length > 0) {
+            const categories = getCategoryChildren(parentId, categoryTreeWithProducts);
+            
+            // Sort categories by name
+            categories.sort((a, b) => {
+                const nameA = (a.name || '').toLowerCase();
+                const nameB = (b.name || '').toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
+            
+            categoryTreeCache[key] = categories;
+            categoryTreeInitialized = true;
+            await displayCategories(categories, categoryTreePath);
+            return;
+        }
 
-    // Fallback to API if tree not built yet
-    if (!forceReload && categoryTreeCache[key]) {
-        await displayCategories(categoryTreeCache[key], categoryTreePath);
-        categoryTreeInitialized = true;
-        return;
+        // Fallback to cache if available and not forcing reload
+        if (categoryTreeCache[key]) {
+            await displayCategories(categoryTreeCache[key], categoryTreePath);
+            categoryTreeInitialized = true;
+            return;
+        }
     }
 
     categoriesListEl.innerHTML = '<div style="text-align: center; padding: 20px; color: #1a73e8; font-size: 0.9em;">Loading Allegro categories…</div>';
@@ -5515,7 +5776,7 @@ function displaySyncLogs(logs) {
     if (!syncLogList) return;
     
     if (!logs || logs.length === 0) {
-        syncLogList.innerHTML = '<div class="sync-log-empty">No sync logs yet. Stock sync will run automatically every 5 minutes.</div>';
+        syncLogList.innerHTML = '<div class="sync-log-empty">No sync logs yet. Stock sync will run automatically at configured intervals.</div>';
         if (productCheckingList) productCheckingList.style.display = 'none';
         return;
     }

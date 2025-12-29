@@ -697,7 +697,9 @@ let userSyncStates = new Map(); // Map<userId, {running: boolean, lastSyncTime: 
 
 // Per-user sync timers
 let userSyncTimers = new Map(); // Map<userId, {intervalId: number, active: boolean}>
-const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+// Sync interval in milliseconds (default: 7 minutes, configurable via SYNC_INTERVAL_MINUTES in .env)
+const SYNC_INTERVAL_MINUTES = parseInt(process.env.SYNC_INTERVAL_MINUTES) || 7;
+const SYNC_INTERVAL_MS = SYNC_INTERVAL_MINUTES * 60 * 1000;
 
 // Sync queue system for managing concurrent syncs (prevents resource exhaustion)
 const syncQueue = {
@@ -7319,13 +7321,10 @@ async function startStockSyncCron() {
           nextSyncTime 
         });
         
-        // Run sync immediately on startup (after a short delay to let server initialize)
-        // Use queue system to manage concurrent syncs
-        setTimeout(() => {
-          enqueueSync(appUserId, Date.now() + (appUserId * 1000)); // Stagger by user ID
-        }, 10000 + (appUserId * 1000)); // Stagger initial syncs by user ID
+        // Note: Sync is now only triggered manually via the sync-start button
+        // Removed automatic startup sync - users can start sync manually when needed
 
-        // Then run every 5 minutes for this user
+        // Then run every SYNC_INTERVAL_MINUTES minutes for this user
         // Use queue system to manage concurrent syncs
         const intervalId = setInterval(() => {
           const nextSyncTime = new Date(Date.now() + SYNC_INTERVAL_MS).toISOString();
@@ -7341,7 +7340,7 @@ async function startStockSyncCron() {
         userSyncTimers.set(appUserId, { intervalId, active: true });
       }
 
-      console.log(`Stock sync timer started for ${users.length} user(s) (runs every 5 minutes using setInterval)`);
+      console.log(`Stock sync timer started for ${users.length} user(s) (runs every ${SYNC_INTERVAL_MINUTES} minutes using setInterval)`);
     } catch (error) {
       console.error('Error starting sync cron:', error);
     }
@@ -7416,7 +7415,7 @@ function startStockSyncCronManual(appUserId) {
   }, SYNC_INTERVAL_MS);
   
   userSyncTimers.set(appUserId, { intervalId, active: true });
-  console.log(`Stock sync timer started manually for user ${appUserId} (runs every 5 minutes)`);
+  console.log(`Stock sync timer started manually for user ${appUserId} (runs every ${SYNC_INTERVAL_MINUTES} minutes)`);
   
   return { success: true, message: 'Sync timer started' };
 }

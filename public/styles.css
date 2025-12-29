@@ -324,6 +324,18 @@ body {
     box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.1);
 }
 
+/* Visual indicator for saved (masked) client secret */
+.form-group input.secret-saved {
+    background-color: #f0f8ff;
+    border-color: #4caf50;
+    border-left-width: 3px;
+}
+
+.form-group input.secret-saved::placeholder {
+    color: #4caf50;
+    font-style: italic;
+}
+
 /* Checkbox styling to match input height */
 input[type="checkbox"] {
     width: 16px;
@@ -493,12 +505,49 @@ input[type="checkbox"] {
     visibility: visible;
 }
 
+/* Tooltip positioned below for header icons */
+.section-header .info-icon-wrapper .info-tooltip {
+    bottom: auto;
+    top: 100%;
+    margin-bottom: 0;
+    margin-top: 8px;
+}
+
+.section-header .info-icon-wrapper .info-tooltip::after {
+    top: auto;
+    bottom: 100%;
+    border-top-color: transparent;
+    border-bottom-color: #333;
+}
+
 .section-actions {
     display: flex;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
     margin-left: auto;
+}
+
+.section-actions .info-icon-wrapper {
+    display: inline-flex;
+    align-items: center;
+    margin-right: 4px;
+}
+
+.section-actions .info-icon {
+    display: inline-flex;
+    align-items: center;
+    color: #666;
+    transition: color 0.2s ease;
+}
+
+.section-actions .info-icon:hover {
+    color: #1a73e8;
+}
+
+.section-actions .info-icon svg {
+    width: 14px;
+    height: 14px;
 }
 
 /* Credentials Overlay */
@@ -2554,6 +2603,28 @@ input[type="checkbox"] {
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+}
+
+.sync-status-row .info-icon-wrapper {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+}
+
+.sync-status-row .info-icon {
+    display: inline-flex;
+    align-items: center;
+    color: #666;
+    transition: color 0.2s ease;
+}
+
+.sync-status-row .info-icon:hover {
+    color: #1a73e8;
+}
+
+.sync-status-row .info-icon svg {
+    width: 14px;
+    height: 14px;
 }
 
 .sync-status-label {
