@@ -450,77 +450,6 @@ input[type="checkbox"] {
     box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.1);
 }
 
-/* Info Icon and Tooltip Styles */
-.info-icon-wrapper {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-}
-
-.info-icon {
-    color: #666;
-    transition: color 0.2s ease;
-}
-
-.info-icon:hover {
-    color: #1a73e8;
-}
-
-.info-tooltip {
-    position: absolute;
-    bottom: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    margin-bottom: 8px;
-    padding: 10px 12px;
-    background: #ffffff;
-    color: #000000;
-    border-radius: 6px;
-    font-size: 13px;
-    line-height: 1.4;
-    white-space: normal;
-    width: 280px;
-    max-width: 90vw;
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
-    z-index: 1000;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    word-wrap: break-word;
-    border: 1px solid #e0e0e0;
-}
-
-.info-tooltip::after {
-    content: '';
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    border: 6px solid transparent;
-    border-top-color: #ffffff;
-}
-
-.info-icon-wrapper:hover .info-tooltip {
-    opacity: 1;
-    visibility: visible;
-}
-
-/* Tooltip positioned below for header icons */
-.section-header .info-icon-wrapper .info-tooltip {
-    bottom: auto;
-    top: 100%;
-    margin-bottom: 0;
-    margin-top: 8px;
-}
-
-.section-header .info-icon-wrapper .info-tooltip::after {
-    top: auto;
-    bottom: 100%;
-    border-top-color: transparent;
-    border-bottom-color: #ffffff;
-}
-
 .section-actions {
     display: flex;
     align-items: center;
@@ -529,27 +458,6 @@ input[type="checkbox"] {
     margin-left: auto;
 }
 
-.section-actions .info-icon-wrapper {
-    display: inline-flex;
-    align-items: center;
-    margin-right: 4px;
-}
-
-.section-actions .info-icon {
-    display: inline-flex;
-    align-items: center;
-    color: #666;
-    transition: color 0.2s ease;
-}
-
-.section-actions .info-icon:hover {
-    color: #1a73e8;
-}
-
-.section-actions .info-icon svg {
-    width: 14px;
-    height: 14px;
-}
 
 /* Credentials Overlay */
 .credentials-overlay {
@@ -1115,20 +1023,6 @@ input[type="checkbox"] {
     background: rgba(26, 115, 232, 0.05);
 }
 
-/* Tooltip in tab buttons should appear below */
-.tab-btn .info-icon-wrapper .info-tooltip {
-    bottom: auto;
-    top: 100%;
-    margin-bottom: 0;
-    margin-top: 8px;
-}
-
-.tab-btn .info-icon-wrapper .info-tooltip::after {
-    top: auto;
-    bottom: 100%;
-    border-top-color: transparent;
-    border-bottom-color: #ffffff;
-}
 
 .tab-icon {
     font-size: 1.1em;

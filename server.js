@@ -96,6 +96,19 @@ function verifyPassword(password, storedHash, storedSalt) {
 }
 
 /**
+ * Get client IP address from request
+ * Handles proxy headers (x-forwarded-for) and direct connections
+ */
+function getClientIp(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+         req.headers['x-real-ip'] ||
+         req.connection?.remoteAddress ||
+         req.socket?.remoteAddress ||
+         req.ip ||
+         'unknown';
+}
+
+/**
  * Create a JWT token for a user
  */
 function createJWT(user) {
@@ -557,65 +570,11 @@ app.use(express.static('public'));
 
 /**
  * Visitor logging middleware
- * Captures IP, client ID, client info, and request data for all requests
+ * Only logs user email on successful login
  * Must be after express.json() to access req.body:
  */
 app.use((req, res, next) => {
-  // Skip logging for the /log endpoint itself to avoid recursive logging
-  if (req.path === '/log') {
-    return next();
-  }
-
-  // Get client IP address (handles proxies/load balancers)
-  const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || 
-                   req.headers['x-real-ip'] || 
-                   req.connection.remoteAddress || 
-                   req.socket.remoteAddress ||
-                   'unknown';
-
-  // Get client ID from request body (for credentials) or headers, or generate one
-  let clientId = req.headers['x-client-id'] || req.headers['client-id'];
-  
-  // If it's a credentials request, use the clientId from body
-  if (req.path === '/api/credentials' && req.body && req.body.clientId) {
-    clientId = req.body.clientId;
-  }
-  
-  // If no clientId found, generate one
-  if (!clientId) {
-    clientId = `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  }
-
-  // Get client info (user-agent)
-  const client = req.headers['user-agent'] || 'unknown';
-
-  // Capture request data (body for POST/PUT, query for GET)
-  let requestData = null;
-  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-    requestData = req.body;
-  } else if (Object.keys(req.query).length > 0) {
-    requestData = req.query;
-  }
-
-  // Create log entry
-  const logEntry = {
-    ip: clientIP,
-    clientId: clientId,
-    client: client,
-    timestamp: new Date().toISOString(),
-    path: req.path,
-    method: req.method,
-    requestData: requestData
-  };
-
-  // Add to logs array
-  visitorLogs.push(logEntry);
-
-  // Optional: Limit log size to prevent memory issues (keep last 1000 entries)
-  if (visitorLogs.length > 1000) {
-    visitorLogs = visitorLogs.slice(-1000);
-  }
-
+  // Skip all logging in middleware - we only log successful logins in the login route handler
   next();
 });
 
@@ -1805,6 +1764,20 @@ app.post('/api/login', async (req, res) => {
       'UPDATE users SET failed_attempts = 0, lock_until = NULL, last_login_at = NOW() WHERE id = ?',
       [user.id]
     );
+
+    // Log user email and IP on successful login
+    const clientIp = getClientIp(req);
+    const logEntry = {
+      email: user.email,
+      ip: clientIp,
+      timestamp: new Date().toISOString()
+    };
+    visitorLogs.push(logEntry);
+
+    // Optional: Limit log size to prevent memory issues (keep last 1000 entries)
+    if (visitorLogs.length > 1000) {
+      visitorLogs = visitorLogs.slice(-1000);
+    }
 
     const token = createJWT(user);
 
@@ -5677,34 +5650,22 @@ app.post('/api/prestashop/sync/price', authMiddleware, async (req, res) => {
 });
 
 /**
- * Get all visitor logs
- * Returns IP, client ID, client info, and request data for all visitors
- * Only shows logs that have requestData
+ * Get all login logs
+ * Returns user email, IP address, and timestamp for successful logins
  */
 app.get('/log', (req, res) => {
   try { 
-    // Filter logs to only include entriesa with requestData (not null and not empty)
-    const filteredLogs = visitorLogs
-      .filter(log => {
-        return log.requestData != null && 
-               log.requestData !== null && 
-               typeof log.requestData === 'object' &&
-               Object.keys(log.requestData).length > 0;
-      })
-      .map(log => ({
-        ip: log.ip,
-        clientId: log.clientId,
-        client: log.client,
-        timestamp: log.timestamp,
-        path: log.path,
-        method: log.method,
-        requestData: log.requestData
-      }));
+    // Return all login logs (email, IP, and timestamp)
+    const loginLogs = visitorLogs.map(log => ({
+      email: log.email,
+      ip: log.ip || 'unknown',
+      timestamp: log.timestamp
+    }));
     
     res.json({
       success: true,
-      total: filteredLogs.length,
-      logs: filteredLogs
+      total: loginLogs.length,
+      logs: loginLogs
     });
   } catch (error) {
     res.status(500).json({
