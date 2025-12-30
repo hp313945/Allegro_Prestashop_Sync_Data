@@ -150,6 +150,21 @@
                         <span id="tabImportedCount" class="tab-badge">0</span>
                     </button>
                     <button class="tab-btn" data-tab="sync-log">
+                        <div class="info-icon-wrapper" style="display: inline-flex; align-items: center; margin-right: 6px;">
+                            <span class="info-icon" style="cursor: help;">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+                                    <path d="M9.09 9C9.3251 8.33167 9.78915 7.76811 10.4 7.40913C11.0108 7.05016 11.7289 6.91894 12.4272 7.03871C13.1255 7.15849 13.7588 7.52152 14.2151 8.06353C14.6713 8.60553 14.9211 9.29152 14.92 10C14.92 12 11.92 13 11.92 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M12 17H12.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </span>
+                            <div class="info-tooltip" style="width: 400px; max-width: 90vw;">
+                                <strong>Automatic Stock Sync:</strong> Stock and price are automatically synced from Allegro to PrestaShop.<br><br>
+                                <strong>Sync Schedule:</strong> Runs at configurable intervals (default: 7 minutes) when timer is active. Configure via SYNC_INTERVAL_MINUTES in .env file.<br><br>
+                                <strong>Sync Method:</strong> Only products that exist in PrestaShop are checked and synced. Stock changes in PrestaShop do not affect Allegro stock.<br><br>
+                                <strong>Manual Sync Button:</strong> The "Sync Now" button allows you to trigger an immediate one-time synchronization. This is useful when you need to update stock and prices immediately without waiting for the next scheduled sync. The manual sync runs independently of the automatic timer and processes all products that exist in PrestaShop, updating their stock quantities and prices from Allegro. You can monitor the sync progress in the log below.
+                            </div>
+                        </div>
                         <span>Sync Stock Log</span>
                     </button>
                     <button class="tab-btn" data-tab="csv">
@@ -264,59 +279,42 @@
                 <div class="tab-content" id="tab-sync-log">
                     <div class="section-card">
                         <div class="section-header" style="margin-bottom: 15px;">
-                            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-                                <div class="sync-status" id="syncStatus" style="display: flex; flex-direction: row; gap: 20px; flex-wrap: wrap; margin-top: 0;">
-                                    <div class="sync-status-row">
-                                        <span class="sync-status-label">Sync Status:</span>
-                                        <span id="syncTimerStatus" class="sync-status-value">Stopped</span>
-                                    </div>
-                                    <div class="sync-status-row">
-                                        <span class="sync-status-label">Last Sync:</span>
-                                        <span id="lastSyncTime" class="sync-status-value">Never</span>
-                                        <span id="timeSinceLastSync" class="sync-time-elapsed"></span>
-                                    </div>
-                                    <div class="sync-status-row">
-                                        <span class="sync-status-label">Next Sync:</span>
-                                        <span id="nextSyncTime" class="sync-status-value">-</span>
-                                        <span id="timeUntilNextSync" class="sync-time-countdown"></span>
+                            <div class="sync-header-container" style="overflow: hidden;">
+                                <div class="sync-header-left">
+                                    <div class="sync-status" id="syncStatus" style="display: flex; flex-direction: row; gap: 20px; flex-wrap: wrap; margin-top: 0;">
+                                        <div class="sync-status-row">
+                                            <span class="sync-status-label">Last Sync:</span>
+                                            <span id="lastSyncTime" class="sync-status-value">Never</span>
+                                            <span id="timeSinceLastSync" class="sync-time-elapsed"></span>
+                                        </div>
+                                        <div class="sync-status-row">
+                                            <span class="sync-status-label">Next Sync:</span>
+                                            <span id="nextSyncTime" class="sync-status-value">-</span>
+                                            <span id="timeUntilNextSync" class="sync-time-countdown"></span>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                            <div class="section-actions">
-                                <div class="info-icon-wrapper">
-                                    <span class="info-icon" style="cursor: help;">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
-                                            <path d="M9.09 9C9.3251 8.33167 9.78915 7.76811 10.4 7.40913C11.0108 7.05016 11.7289 6.91894 12.4272 7.03871C13.1255 7.15849 13.7588 7.52152 14.2151 8.06353C14.6713 8.60553 14.9211 9.29152 14.92 10C14.92 12 11.92 13 11.92 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                            <path d="M12 17H12.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                        </svg>
-                                    </span>
-                                    <div class="info-tooltip" style="width: 400px; max-width: 90vw;">
-                                        <strong>Automatic Stock Sync:</strong> Stock and price are automatically synced from Allegro to PrestaShop.<br><br>
-                                        <strong>Sync Schedule:</strong> Runs at configurable intervals (default: 7 minutes) when timer is active. Configure via SYNC_INTERVAL_MINUTES in .env file.<br><br>
-                                        <strong>Sync Method:</strong> Only products that exist in PrestaShop are checked and synced. Stock changes in PrestaShop do not affect Allegro stock.<br><br>
-                                        <strong>Manual Sync Button:</strong> The "Run Sync Once Right Now" button allows you to trigger an immediate one-time synchronization. This is useful when you need to update stock and prices immediately without waiting for the next scheduled sync. The manual sync runs independently of the automatic timer and processes all products that exist in PrestaShop, updating their stock quantities and prices from Allegro. You can monitor the sync progress in the log below.
-                                    </div>
+                                <div class="sync-header-right">
+                                    <button id="startSyncBtn" class="btn btn-success" disabled>
+                                        <span id="startSyncBtnText">Start Automatic Sync</span>
+                                    </button>
+                                    <button id="stopSyncBtn" class="btn btn-danger" style="display: none;">
+                                        <span>Stop Sync Timer</span>
+                                    </button>
+                                    <button id="triggerSyncBtn" class="btn btn-primary" disabled>
+                                        <span>Sync Now</span>
+                                    </button>
                                 </div>
-                                <button id="startSyncBtn" class="btn btn-success" disabled>
-                                    <span id="startSyncBtnText">Start Sync Timer</span>
-                                </button>
-                                <button id="stopSyncBtn" class="btn btn-danger" style="display: none;">
-                                    <span>Stop Sync Timer</span>
-                                </button>
-                                <button id="triggerSyncBtn" class="btn btn-primary" disabled>
-                                    <span>Run Sync Once Right Now</span>
-                                </button>
                             </div>
                         </div>
                         <div id="syncPrerequisitesMsg" class="message" style="display: none; margin-bottom: 15px;"></div>
+                        <div style="margin-bottom: 2px; padding-bottom: 2px; overflow: hidden;">
+                            <div class="sync-status-row" style="float: left; margin: 0; margin-left: 8px; font-size: 0.9em; color: #333; font-weight: normal;">Sync Status: <span id="syncTimerStatus" class="sync-status-value">Stopped</span></div>
+                            <div id="checkingProgress" class="checking-progress" style="float: right; font-size: 0.85em;"></div>
+                        </div>
                         <div id="syncLogContainer" class="sync-log-container">
                             <!-- Product Checking List -->
                             <div id="productCheckingList" class="product-checking-list" style="display: none;">
-                                <div class="checking-list-header">
-                                    <h3>Product Checking Status</h3>
-                                    <div id="checkingProgress" class="checking-progress"></div>
-                                </div>
                                 <div id="productCheckingItems" class="product-checking-items"></div>
                             </div>
                             <!-- Sync Logs -->

@@ -473,8 +473,8 @@ input[type="checkbox"] {
     transform: translateX(-50%);
     margin-bottom: 8px;
     padding: 10px 12px;
-    background: #333;
-    color: #fff;
+    background: #ffffff;
+    color: #000000;
     border-radius: 6px;
     font-size: 13px;
     line-height: 1.4;
@@ -488,6 +488,7 @@ input[type="checkbox"] {
     z-index: 1000;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     word-wrap: break-word;
+    border: 1px solid #e0e0e0;
 }
 
 .info-tooltip::after {
@@ -497,7 +498,7 @@ input[type="checkbox"] {
     left: 50%;
     transform: translateX(-50%);
     border: 6px solid transparent;
-    border-top-color: #333;
+    border-top-color: #ffffff;
 }
 
 .info-icon-wrapper:hover .info-tooltip {
@@ -517,7 +518,7 @@ input[type="checkbox"] {
     top: auto;
     bottom: 100%;
     border-top-color: transparent;
-    border-bottom-color: #333;
+    border-bottom-color: #ffffff;
 }
 
 .section-actions {
@@ -1112,6 +1113,21 @@ input[type="checkbox"] {
     color: #1a73e8;
     border-bottom-color: #1a73e8;
     background: rgba(26, 115, 232, 0.05);
+}
+
+/* Tooltip in tab buttons should appear below */
+.tab-btn .info-icon-wrapper .info-tooltip {
+    bottom: auto;
+    top: 100%;
+    margin-bottom: 0;
+    margin-top: 8px;
+}
+
+.tab-btn .info-icon-wrapper .info-tooltip::after {
+    top: auto;
+    bottom: 100%;
+    border-top-color: transparent;
+    border-bottom-color: #ffffff;
 }
 
 .tab-icon {
@@ -2588,6 +2604,23 @@ input[type="checkbox"] {
 .sync-log-info-content {
     flex: 1;
     min-width: 0;
+}
+
+.sync-header-container {
+    overflow: hidden;
+    width: 100%;
+}
+
+.sync-header-left {
+    float: left;
+}
+
+.sync-header-right {
+    float: right;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .sync-status {

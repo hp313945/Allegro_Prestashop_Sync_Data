@@ -156,11 +156,13 @@ async function login(email, password) {
         // Update user email display
         updateUserDisplay(data.user);
         
-        // Load credentials from database after login in parallel for faster loading
-        await Promise.all([
+        // Load credentials from database in background (non-blocking for faster login)
+        Promise.all([
             loadCredentialsFromAPI(),
             loadPrestashopConfigFromAPI()
-        ]);
+        ]).catch(error => {
+            console.error('Error loading credentials in background:', error);
+        });
         
         return data;
     } catch (error) {
@@ -170,26 +172,28 @@ async function login(email, password) {
 
 // Logout function
 async function logout() {
-    try {
-        // Capture user info before clearing auth
-        const user = currentUser;
-        const token = getAuthToken();
-        if (token) {
-            await authFetch(`${API_BASE}/api/logout`, {
-                method: 'POST'
-            });
-        }
-
-        // Show logout info toast
-        if (user && user.email) {
-            const logoutTime = new Date().toLocaleString();
-            showToast(`${user.email} logged out at ${logoutTime}`, 'info', 5000);
-        }
-    } catch (error) {
-        console.error('Logout error:', error);
-    } finally {
-        clearAuth();
-        showLoginScreen();
+    // Capture user info before clearing auth
+    const user = currentUser;
+    const token = getAuthToken();
+    
+    // Show login screen immediately for fast logout
+    clearAuth();
+    showLoginScreen();
+    
+    // Show logout info toast
+    if (user && user.email) {
+        const logoutTime = new Date().toLocaleString();
+        showToast(`${user.email} logged out at ${logoutTime}`, 'info', 5000);
+    }
+    
+    // Do logout API call in background (non-blocking)
+    if (token) {
+        authFetch(`${API_BASE}/api/logout`, {
+            method: 'POST'
+        }).catch(error => {
+            // Silently handle errors - user is already logged out on client side
+            console.error('Logout API error (non-critical):', error);
+        });
     }
 }
 
@@ -197,6 +201,9 @@ async function logout() {
 function showLoginScreen() {
     document.getElementById('loginScreen').style.display = 'flex';
     document.getElementById('mainApp').style.display = 'none';
+    // Reset logout listener flag when showing login screen
+    isLogoutListenerAttached = false;
+    isLogoutInProgress = false;
 }
 
 // Check if user is logged in on page load
@@ -275,22 +282,24 @@ document.addEventListener('DOMContentLoaded', async () => {
             const loginTime = new Date().toLocaleString();
             showToast(`${userEmail} logged in at ${loginTime}`, 'success', 5000);
             
-            // Initialize app components (these may fail, but UI should already be shown)
-            try {
-                setupEventListeners();
-                loadImportedOffers();
-                loadPrestashopConfig();
-                checkPrestashopStatus();
-                await loadSavedCredentials();
-                updateUIState(false);
-                updateButtonStates();
-                if (typeof updateSyncCategoryButtonState === 'function') {
-                    updateSyncCategoryButtonState();
-                }
-            } catch (initError) {
+            // Initialize app components in background (non-blocking for faster login)
+            setupEventListeners();
+            updateUIState(false);
+            updateButtonStates();
+            if (typeof updateSyncCategoryButtonState === 'function') {
+                updateSyncCategoryButtonState();
+            }
+            
+            // Load data in background (non-blocking)
+            Promise.all([
+                loadImportedOffers(),
+                loadPrestashopConfig(),
+                checkPrestashopStatus(),
+                loadSavedCredentials()
+            ]).catch(initError => {
                 console.error('Error initializing app components:', initError);
                 // UI is already shown, so just log the error
-            }
+            });
         } catch (error) {
             loginErrorMessage.textContent = error.message || 'Login failed. Please try again.';
             loginErrorMessage.style.display = 'block';
@@ -712,23 +721,39 @@ function updateCsvExportButtonsState() {
 
 // Store logout handler reference to allow removal
 let logoutHandler = null;
+// Flag to prevent multiple confirm dialogs
+let isLogoutInProgress = false;
+// Track if listener is already attached to prevent duplicates
+let isLogoutListenerAttached = false;
 
 // Setup event listeners
 function setupEventListeners() {
-    // Logout button - remove old listener before adding new one
+    // Logout button - ensure listener is only attached once
     const logoutBtn = document.getElementById('logoutBtn');
-    if (logoutBtn) {
-        // Remove existing listener if it exists
-        if (logoutHandler) {
-            logoutBtn.removeEventListener('click', logoutHandler);
-        }
-        // Create new handler function
+    if (logoutBtn && !isLogoutListenerAttached) {
+        // Set flag immediately to prevent race conditions
+        isLogoutListenerAttached = true;
+        
+        // Create handler function with flag check to prevent multiple confirm dialogs
         logoutHandler = async () => {
+            // Prevent multiple confirm dialogs
+            if (isLogoutInProgress) {
+                return;
+            }
+            
             if (confirm('Are you sure you want to log out?')) {
-                await logout();
+                isLogoutInProgress = true;
+                try {
+                    await logout();
+                } finally {
+                    // Reset flag after logout completes (or fails)
+                    setTimeout(() => {
+                        isLogoutInProgress = false;
+                    }, 1000);
+                }
             }
         };
-        // Add the new listener
+        // Add the listener only once
         logoutBtn.addEventListener('click', logoutHandler);
     }
 
@@ -3612,12 +3637,6 @@ function displayImportedOffers() {
                              data-current-image-index="0"
                              ${totalImageCount > 1 ? `onclick="navigateImage(event, '${offer.id}', 'next')" title="Click to see next image"` : ''}
                              onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                    ${totalImageCount > 0 ? `
-                        <div class="offer-image-count-badge" title="${totalImageCount} image${totalImageCount > 1 ? 's' : ''} available from Allegro${totalImageCount > 1 ? ' - Click image to navigate' : ''}">
-                            <span class="offer-image-count-icon">📷</span>
-                            <span class="offer-image-count-number">${totalImageCount}</span>
-                        </div>
-                    ` : ''}
                     ${totalImageCount > 1 ? `
                         <button class="offer-image-nav-btn offer-image-nav-prev" onclick="navigateImage(event, '${offer.id}', 'prev')" title="Previous image">‹</button>
                         <button class="offer-image-nav-btn offer-image-nav-next" onclick="navigateImage(event, '${offer.id}', 'next')" title="Next image">›</button>
@@ -6021,6 +6040,7 @@ function getStatusText(status) {
 let currentLastSyncTime = null;
 let currentNextSyncTime = null;
 let syncTimerInterval = null;
+let isTimerActive = false; // Track if sync timer is running
 
 function updateSyncStatus(lastSyncTime, nextSyncTime) {
     currentLastSyncTime = lastSyncTime;
@@ -6032,7 +6052,7 @@ function updateSyncStatus(lastSyncTime, nextSyncTime) {
     if (lastSyncTimeEl) {
         if (lastSyncTime) {
             const lastSync = new Date(lastSyncTime);
-            lastSyncTimeEl.textContent = lastSync.toLocaleString();
+            lastSyncTimeEl.textContent = lastSync.toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
         } else {
             lastSyncTimeEl.textContent = 'Never';
         }
@@ -6041,7 +6061,7 @@ function updateSyncStatus(lastSyncTime, nextSyncTime) {
     if (nextSyncTimeEl) {
         if (nextSyncTime) {
             const nextSync = new Date(nextSyncTime);
-            nextSyncTimeEl.textContent = nextSync.toLocaleString();
+            nextSyncTimeEl.textContent = nextSync.toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
         } else {
             nextSyncTimeEl.textContent = 'Calculating...';
         }
@@ -6082,20 +6102,26 @@ function updateSyncTimers() {
     }
     
     // Update "time until next sync"
-    if (timeUntilEl && currentNextSyncTime) {
-        const nextSync = new Date(currentNextSyncTime);
-        const now = new Date();
-        const remaining = Math.floor((nextSync - now) / 1000); // seconds
-        
-        if (remaining > 0) {
-            timeUntilEl.textContent = `(in ${formatTimeRemaining(remaining)})`;
-            timeUntilEl.style.color = '#1a73e8';
+    if (timeUntilEl) {
+        if (!isTimerActive) {
+            // Timer is stopped - don't show next sync time
+            timeUntilEl.textContent = '';
+        } else if (currentNextSyncTime) {
+            const nextSync = new Date(currentNextSyncTime);
+            const now = new Date();
+            const remaining = Math.floor((nextSync - now) / 1000); // seconds
+            
+            if (remaining > 0) {
+                timeUntilEl.textContent = `(in ${formatTimeRemaining(remaining)})`;
+                timeUntilEl.style.color = '#1a73e8';
+            } else {
+                // Timer is active and time has passed - sync should be running
+                timeUntilEl.textContent = '(sync running...)';
+                timeUntilEl.style.color = '#34a853';
+            }
         } else {
-            timeUntilEl.textContent = '(sync running...)';
-            timeUntilEl.style.color = '#34a853';
+            timeUntilEl.textContent = '';
         }
-    } else if (timeUntilEl) {
-        timeUntilEl.textContent = '';
     }
 }
 
@@ -6134,7 +6160,7 @@ function formatTimeRemaining(seconds) {
 // Check if prerequisites are met for sync
 async function checkSyncPrerequisites() {
     try {
-        const response = await apiFetch(`${API_BASE}/api/sync/prerequisites`);
+        const response = await authFetch(`${API_BASE}/api/sync/prerequisites`);
         const data = await response.json();
         
         const msgEl = document.getElementById('syncPrerequisitesMsg');
@@ -6185,7 +6211,7 @@ async function checkSyncPrerequisites() {
 // Update sync control buttons based on status
 async function updateSyncControlButtons() {
     try {
-        const response = await apiFetch(`${API_BASE}/api/sync/status`);
+        const response = await authFetch(`${API_BASE}/api/sync/status`);
         const data = await response.json();
         
         const startBtn = document.getElementById('startSyncBtn');
@@ -6217,9 +6243,21 @@ async function updateSyncControlButtons() {
             statusEl.style.color = data.timerActive ? '#34a853' : '#ea4335';
         }
         
+        // Store timer active state for use in updateSyncTimers
+        isTimerActive = data.timerActive || false;
+        
         // Update sync times
         if (data.lastSyncTime || data.nextSyncTime) {
             updateSyncStatus(data.lastSyncTime, data.nextSyncTime);
+        } else {
+            // If no next sync time and timer is stopped, clear it
+            if (!data.timerActive) {
+                currentNextSyncTime = null;
+                const timeUntilEl = document.getElementById('timeUntilNextSync');
+                if (timeUntilEl) {
+                    timeUntilEl.textContent = '';
+                }
+            }
         }
     } catch (error) {
         console.error('Error updating sync control buttons:', error);
@@ -6229,7 +6267,7 @@ async function updateSyncControlButtons() {
 // Update sync status from server
 async function updateSyncStatusFromServer() {
     try {
-        const response = await apiFetch(`${API_BASE}/api/sync/status`);
+        const response = await authFetch(`${API_BASE}/api/sync/status`);
         const data = await response.json();
         
         const statusEl = document.getElementById('syncTimerStatus');
@@ -6238,8 +6276,20 @@ async function updateSyncStatusFromServer() {
             statusEl.style.color = data.timerActive ? '#34a853' : '#ea4335';
         }
         
+        // Store timer active state for use in updateSyncTimers
+        isTimerActive = data.timerActive || false;
+        
         if (data.lastSyncTime || data.nextSyncTime) {
             updateSyncStatus(data.lastSyncTime, data.nextSyncTime);
+        } else {
+            // If no next sync time and timer is stopped, clear it
+            if (!data.timerActive) {
+                currentNextSyncTime = null;
+                const timeUntilEl = document.getElementById('timeUntilNextSync');
+                if (timeUntilEl) {
+                    timeUntilEl.textContent = '';
+                }
+            }
         }
     } catch (error) {
         console.error('Error updating sync status:', error);
@@ -6255,7 +6305,7 @@ async function startSyncTimerControl() {
     }
     
     try {
-        const response = await apiFetch(`${API_BASE}/api/sync/start`, {
+        const response = await authFetch(`${API_BASE}/api/sync/start`, {
             method: 'POST'
         });
         const data = await response.json();
@@ -6283,7 +6333,7 @@ async function stopSyncTimerControl() {
     }
     
     try {
-        const response = await apiFetch(`${API_BASE}/api/sync/stop`, {
+        const response = await authFetch(`${API_BASE}/api/sync/stop`, {
             method: 'POST'
         });
         const data = await response.json();
@@ -6311,7 +6361,7 @@ async function triggerSyncNow() {
     }
     
     try {
-        const response = await apiFetch(`${API_BASE}/api/sync/trigger`, {
+        const response = await authFetch(`${API_BASE}/api/sync/trigger`, {
             method: 'POST'
         });
         const data = await response.json();
@@ -6332,7 +6382,7 @@ async function triggerSyncNow() {
     } finally {
         if (triggerBtn) {
             triggerBtn.disabled = false;
-            triggerBtn.querySelector('span').textContent = 'Run Sync Now';
+            triggerBtn.querySelector('span').textContent = 'Sync Now';
         }
     }
 }

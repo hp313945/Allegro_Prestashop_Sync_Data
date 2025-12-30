@@ -12,13 +12,10 @@ const jwt = require('jsonwebtoken');
 
 // Load environment variables from .env file (explicitly from project root)
 const envPath = path.join(__dirname, '.env');
-console.log(`Looking for .env file at: ${envPath}`);
 
 // Check if .env file exists
 if (!fs.existsSync(envPath)) {
   console.warn(`Warning: .env file not found at: ${envPath}`);
-} else {
-  console.log(`✓ .env file found at: ${envPath}`);
 }
 
 // Load .env file - dotenv doesn't expand variables by default, so $ in passwords should be fine
@@ -27,21 +24,6 @@ const dotenvResult = require('dotenv').config({ path: envPath });
 if (dotenvResult.error) {
   console.error('Error loading .env file:', dotenvResult.error.message);
   console.warn('Using default values or system environment variables.');
-} else {
-  console.log('✓ .env file loaded successfully');
-  // Debug: Show which variables were loaded
-  if (dotenvResult.parsed) {
-    const loadedVars = Object.keys(dotenvResult.parsed);
-    console.log(`  Loaded ${loadedVars.length} environment variables: ${loadedVars.join(', ')}`);
-    // Show actual values for debugging (be careful with sensitive data)
-    console.log('  Sample values:');
-    if (dotenvResult.parsed.DB_NAME) console.log(`    DB_NAME="${dotenvResult.parsed.DB_NAME}"`);
-    if (dotenvResult.parsed.ADMIN_EMAIL) console.log(`    ADMIN_EMAIL="${dotenvResult.parsed.ADMIN_EMAIL}"`);
-    if (dotenvResult.parsed.ADMIN_PASSWORD) console.log(`    ADMIN_PASSWORD="${dotenvResult.parsed.ADMIN_PASSWORD ? '*** (set)' : '(not set)'}"`);
-  } else {
-    console.warn('  Warning: dotenv.parsed is null or undefined - no variables were parsed!');
-    console.warn('  This usually means the .env file format is incorrect or the file is empty.');
-  }
 }
 
 const app = express();
@@ -67,26 +49,11 @@ if (!DB_HOST || !DB_USER || !DB_NAME) {
   process.exit(1);
 }
 
-// Log database configuration (without showing password)
-console.log('Database Configuration:');
-console.log(`  Host: ${DB_HOST}`);
-console.log(`  Port: ${DB_PORT}`);
-console.log(`  User: ${DB_USER}`);
-console.log(`  Database: ${DB_NAME}`);
-console.log(`  Password: ${DB_PASSWORD ? '*** (set)' : '(not set - using empty)'}`);
-
-// Log admin configuration status
+// Admin configuration
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-console.log('Admin Configuration:');
-console.log(`  ADMIN_EMAIL: ${ADMIN_EMAIL ? `"${ADMIN_EMAIL}"` : '(not set)'}`);
-console.log(`  ADMIN_PASSWORD: ${ADMIN_PASSWORD ? '*** (set)' : '(not set)'}`);
-if (ADMIN_EMAIL && ADMIN_PASSWORD) {
-  console.log(`  → Admin user "${ADMIN_EMAIL}" will be created if not exists`);
-} else {
-  console.warn('  ⚠ Warning: ADMIN_EMAIL or ADMIN_PASSWORD not set. Admin user will not be auto-created.');
-  if (!ADMIN_EMAIL) console.warn('    Missing: ADMIN_EMAIL');
-  if (!ADMIN_PASSWORD) console.warn('    Missing: ADMIN_PASSWORD');
+if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+  console.warn('⚠ Warning: ADMIN_EMAIL or ADMIN_PASSWORD not set. Admin user will not be auto-created.');
 }
 
 // JWT and security configuration
@@ -410,7 +377,6 @@ async function initDatabase() {
     console.warn('Migration note for prestashop_credentials:', error.message);
   }
 
-  console.log('✓ Configuration tables created/verified');
 
   // Create product_mappings table with proper indexes for fast lookups (per-user)
   await dbPool.query(`
@@ -515,7 +481,6 @@ async function initDatabase() {
     console.warn('Migration note for category_cache:', error.message);
   }
 
-  console.log('✓ Product mappings and category cache tables created/verified');
 
   // Create sync_logs table (per-user sync logs)
   await dbPool.query(`
@@ -539,7 +504,6 @@ async function initDatabase() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
-  console.log('✓ Sync logs table created/verified');
 
   // Create user_sync_settings table (per-user sync settings and state persistence)
   await dbPool.query(`
@@ -558,7 +522,6 @@ async function initDatabase() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
-  console.log('✓ User sync settings table created/verified');
 
   // Ensure at least one admin user exists if ADMIN_EMAIL / ADMIN_PASSWORD are provided
   const adminEmail = process.env.ADMIN_EMAIL;
@@ -580,11 +543,7 @@ async function initDatabase() {
           [adminEmail, hash, salt, 'admin']
         );
         console.log(`✓ Created initial admin user: ${adminEmail}`);
-      } else {
-        console.log(`✓ Admin user already exists: ${adminEmail}`);
       }
-    } else {
-      console.log(`✓ Admin user(s) already exist, skipping initial-seed-admin creation`);
     }
   } else {
     console.warn('⚠ Admin user not created: ADMIN_EMAIL or ADMIN_PASSWORD not set in .env file');
@@ -1746,10 +1705,7 @@ const CategoryCacheDB = {
 // Then load tokens and credentials from database
 initDatabase()
   .then(async () => {
-    console.log(`MariaDB database '${DB_NAME}' initialized`);
-    
     // Configuration is now loaded per-user on demand, not at startup
-    
     // Product mappings and category cache are now loaded per-user on demand
     // No need to load all at startup since they are user-specific
   })
@@ -7371,7 +7327,7 @@ function stopStockSyncCron() {
 /**
  * Start the sync timer manually for a specific user
  */
-function startStockSyncCronManual(appUserId) {
+async function startStockSyncCronManual(appUserId) {
   if (!appUserId) {
     return { success: false, error: 'User ID is required' };
   }
@@ -7416,6 +7372,21 @@ function startStockSyncCronManual(appUserId) {
   
   userSyncTimers.set(appUserId, { intervalId, active: true });
   console.log(`Stock sync timer started manually for user ${appUserId} (runs every ${SYNC_INTERVAL_MINUTES} minutes)`);
+  
+  // Save timer state to database
+  try {
+    const userState = userSyncStates.get(appUserId);
+    await saveSyncSettings(appUserId, {
+      autoSyncEnabled: true,
+      syncIntervalMs: SYNC_INTERVAL_MS,
+      lastSyncTime: userState?.lastSyncTime || null,
+      nextSyncTime: nextSyncTime,
+      syncTimerActive: true
+    });
+  } catch (error) {
+    console.error(`Error saving sync timer state for user ${appUserId}:`, error.message);
+    // Don't fail the operation if database save fails
+  }
   
   return { success: true, message: 'Sync timer started' };
 }
@@ -7645,7 +7616,7 @@ app.post('/api/sync/start', authMiddleware, async (req, res) => {
       });
     }
 
-    const result = startStockSyncCronManual(appUserId);
+    const result = await startStockSyncCronManual(appUserId);
     const userTimer = userSyncTimers.get(appUserId);
     if (result.success) {
       res.json({
@@ -7679,12 +7650,42 @@ app.post('/api/sync/stop', authMiddleware, async (req, res) => {
     if (userTimer && userTimer.intervalId) {
       clearInterval(userTimer.intervalId);
       userSyncTimers.set(appUserId, { intervalId: null, active: false });
+      
+      // Save timer state to database
+      try {
+        const userState = userSyncStates.get(appUserId) || { lastSyncTime: null, nextSyncTime: null };
+        await saveSyncSettings(appUserId, {
+          autoSyncEnabled: false,
+          syncIntervalMs: SYNC_INTERVAL_MS,
+          lastSyncTime: userState.lastSyncTime || null,
+          nextSyncTime: userState.nextSyncTime || null,
+          syncTimerActive: false
+        });
+      } catch (error) {
+        console.error(`Error saving sync timer state for user ${appUserId}:`, error.message);
+        // Don't fail the operation if database save fails
+      }
+      
       res.json({
         success: true,
         message: 'Sync timer stopped',
         timerActive: false
       });
     } else {
+      // Even if timer wasn't running in memory, update database to ensure consistency
+      try {
+        const userState = userSyncStates.get(appUserId) || { lastSyncTime: null, nextSyncTime: null };
+        await saveSyncSettings(appUserId, {
+          autoSyncEnabled: false,
+          syncIntervalMs: SYNC_INTERVAL_MS,
+          lastSyncTime: userState.lastSyncTime || null,
+          nextSyncTime: userState.nextSyncTime || null,
+          syncTimerActive: false
+        });
+      } catch (error) {
+        console.error(`Error saving sync timer state for user ${appUserId}:`, error.message);
+      }
+      
       res.json({
         success: true,
         message: 'Sync timer was not running',
@@ -7705,15 +7706,98 @@ app.post('/api/sync/stop', authMiddleware, async (req, res) => {
 app.get('/api/sync/status', authMiddleware, async (req, res) => {
   try {
     const appUserId = req.user.userId;
-    const userState = userSyncStates.get(appUserId) || { running: false, lastSyncTime: null, nextSyncTime: null };
+    
+    // Load sync settings from database to restore state
+    const settings = await loadSyncSettings(appUserId);
+    
+    // Restore sync state from database if available
+    if (settings.lastSyncTime || settings.nextSyncTime) {
+      if (!userSyncStates.has(appUserId)) {
+        userSyncStates.set(appUserId, { running: false, lastSyncTime: null, nextSyncTime: null });
+      }
+      const userState = userSyncStates.get(appUserId);
+      if (settings.lastSyncTime) {
+        userState.lastSyncTime = settings.lastSyncTime;
+      }
+      if (settings.nextSyncTime) {
+        userState.nextSyncTime = settings.nextSyncTime;
+      }
+    }
+    
+    // Restore timer if it was active in database but not in memory
     const userTimer = userSyncTimers.get(appUserId);
+    if (settings.syncTimerActive && (!userTimer || !userTimer.active)) {
+      // Timer was active in database but not in memory - restore it
+      if (USE_INTERVAL_TIMER) {
+        try {
+          // Load user's credentials and tokens to check prerequisites
+          await loadCredentials(appUserId);
+          await loadTokens(appUserId);
+          await loadPrestashopCredentials(appUserId);
+          
+          const hasPrestashopConfig =
+            !!(prestashopCredentials.baseUrl && prestashopCredentials.apiKey);
+          const hasAllegroConfig =
+            !!(
+              (userOAuthTokens.accessToken || userOAuthTokens.refreshToken) &&
+              userCredentials.clientId &&
+              userCredentials.clientSecret
+            );
+          
+          // Only restore timer if prerequisites are met
+          if (hasPrestashopConfig && hasAllegroConfig) {
+            // Check again if timer is now active (race condition protection)
+            const currentTimer = userSyncTimers.get(appUserId);
+            if (!currentTimer || !currentTimer.active) {
+              const result = await startStockSyncCronManual(appUserId);
+              if (result.success) {
+                console.log(`Restored sync timer for user ${appUserId} from database`);
+                // Update nextSyncTime from database if available
+                if (settings.nextSyncTime) {
+                  const userState = userSyncStates.get(appUserId);
+                  if (userState) {
+                    userState.nextSyncTime = settings.nextSyncTime;
+                  }
+                }
+              }
+            }
+          } else {
+            // Prerequisites not met - update database to reflect that timer cannot be active
+            console.log(`Cannot restore sync timer for user ${appUserId}: prerequisites not met`);
+            try {
+              await saveSyncSettings(appUserId, {
+                ...settings,
+                syncTimerActive: false
+              });
+            } catch (saveError) {
+              console.error(`Error updating sync timer state in database:`, saveError.message);
+            }
+          }
+        } catch (error) {
+          console.error(`Error restoring sync timer for user ${appUserId}:`, error.message);
+          // If restore fails, update database to reflect that timer is not active
+          try {
+            await saveSyncSettings(appUserId, {
+              ...settings,
+              syncTimerActive: false
+            });
+          } catch (saveError) {
+            console.error(`Error updating sync timer state in database:`, saveError.message);
+          }
+        }
+      }
+    }
+    
+    // Get current state (after potential restoration)
+    const userState = userSyncStates.get(appUserId) || { running: false, lastSyncTime: null, nextSyncTime: null };
+    const currentTimer = userSyncTimers.get(appUserId);
     
     res.json({
       success: true,
       running: userState.running,
       lastSyncTime: userState.lastSyncTime,
       nextSyncTime: userState.nextSyncTime,
-      timerActive: userTimer ? userTimer.active : false,
+      timerActive: currentTimer ? currentTimer.active : false,
       useIntervalTimer: USE_INTERVAL_TIMER
     });
   } catch (error) {
@@ -7746,9 +7830,7 @@ if (hasSSLCertificates) {
 
     const httpsServer = https.createServer(httpsOptions, app);
     httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
-      console.log(`HTTPS Server running on port ${HTTPS_PORT} (accessible from all network interfaces)`);
-      // Sync timer is now controlled by user via UI - don't auto-start
-      console.log('Sync timer is stopped. Use the UI to start/stop sync timer.');
+      console.log(`Server running on HTTPS port ${HTTPS_PORT}`);
     });
 
     // Optionally redirect HTTP to HTTPS
@@ -7763,28 +7845,23 @@ if (hasSSLCertificates) {
     } else {
       // Also start HTTP server on default port if not forcing HTTPS
       http.createServer(app).listen(PORT, '0.0.0.0', () => {
-        console.log(`HTTP Server also running on port ${PORT}`);
+        console.log(`Server also running on HTTP port ${PORT}`);
       });
     }
   } catch (error) {
     console.error('Error starting HTTPS server:', error.message);
     console.log('Falling back to HTTP server...');
     http.createServer(app).listen(PORT, '0.0.0.0', () => {
-      console.log(`HTTP Server running on port ${PORT} (accessible from all network interfaces)`);
-      // Sync timer is now controlled by user via UI - don't auto-start
-      console.log('Sync timer is stopped. Use the UI to start/stop sync timer.');
+      console.log(`Server running on HTTP port ${PORT}`);
     });
   }
 } else {
   // HTTP server only (development mode)
   http.createServer(app).listen(PORT, '0.0.0.0', () => {
-    console.log(`HTTP Server running on port ${PORT} (accessible from all network interfaces)`);
+    console.log(`Server running on HTTP port ${PORT}`);
     if (process.env.NODE_ENV !== 'production') {
       console.log('Note: HTTPS not configured. SSL certificates not found.');
-      console.log(`Expected paths: ${SSL_KEY_PATH}, ${SSL_CERT_PATH}`);
     }
-    // Sync timer is now controlled by user via UI - don't auto-start
-    console.log('Sync timer is stopped. Use the UI to start/stop sync timer.');
   });
 }
 
